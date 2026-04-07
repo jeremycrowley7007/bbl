@@ -7,7 +7,7 @@ from werkzeug.utils import secure_filename
 # ---------------------------------------------------------------------------
 # Configuration — all tuneable via environment variables
 # ---------------------------------------------------------------------------
-DATA_DIR = os.environ.get("DATA_DIR", os.path.dirname(__file__) or ".")
+DATA_DIR = os.environ.get("DATA_DIR", os.path.dirname(os.path.abspath(__file__)))
 DATABASE = os.path.join(DATA_DIR, "bocce.db")
 PHOTO_DIR = os.path.join(DATA_DIR, "photos")
 ADMIN_KEY = os.environ.get("ADMIN_KEY", "bocce-admin-2024")
