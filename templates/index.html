@@ -1,0 +1,174 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>(BBL) Bocce Ball League</title>
+  <link rel="stylesheet" href="/static/style.css">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link
+    href="https://fonts.googleapis.com/css2?family=Oswald:wght@400;500;600;700&family=Inter:wght@400;500;600;700&display=swap"
+    rel="stylesheet">
+</head>
+
+<body>
+  <header>
+    <div class="header-inner">
+      <h1>(BBL) BOCCE BALL LEAGUE</h1>
+      <button class="btn btn-admin" id="admin-toggle-btn" onclick="toggleAdminMode()">Admin</button>
+    </div>
+  </header>
+
+  <main>
+    <section id="hero-section" class="hero">
+      <div class="hero-content">
+        <h2 class="hero-title">Welcome to the League</h2>
+        <p class="hero-subtitle">Competitive ethos. Strong talent. Precision bocce.</p>
+        <p class="hero-description">
+          It all about placement until its not and then its about bowling.
+        </p>
+      </div>
+    </section>
+
+    <section id="players-section">
+      <h2 class="section-title">THE ROSTER</h2>
+      <p class="stat-legend">
+        <span><b>PLC</b> Placement</span>
+        <span><b>BWL</b> Bowling</span>
+        <span><b>DEF</b> Defense</span>
+        <span><b>WBL</b> Wall Ball</span>
+        <span><b>SUB</b> Substance Use</span>
+        <span><b>LNG</b> Long Game</span>
+      </p>
+      <div id="player-cards" class="player-grid"></div>
+    </section>
+
+    <section id="requests-section">
+      <div class="requests-header">
+        <div class="tabs">
+          <button class="tab active" data-tab="open" onclick="switchTab('open')">
+            Open Requests <span id="open-count" class="badge">0</span>
+          </button>
+          <button class="tab" data-tab="closed" onclick="switchTab('closed')">
+            Past Requests <span id="closed-count" class="badge">0</span>
+          </button>
+        </div>
+        <div class="request-cta">
+          <button class="btn btn-secondary" onclick="openNewPlayerModal()">+ New Player</button>
+          <button class="btn btn-primary" onclick="openNewRequestModal()">+ Stat Change</button>
+        </div>
+      </div>
+      <p class="requests-explainer">Think a player's stats are wrong? Submit a request with your evidence and let the
+        league weigh in.</p>
+      <div id="requests-list" class="requests-container"></div>
+    </section>
+  </main>
+
+  <!-- New Request Modal -->
+  <div id="new-request-modal" class="modal" onclick="closeModal(event)">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h3>Request Stat Update</h3>
+        <button class="modal-close" onclick="closeNewRequestModal()">&times;</button>
+      </div>
+      <form id="new-request-form" onsubmit="submitRequest(event)">
+        <div class="form-group">
+          <label>Your Name</label>
+          <input type="text" id="req-author" required placeholder="Enter your name">
+        </div>
+        <div class="form-group">
+          <label>Player</label>
+          <select id="req-player" required onchange="onPlayerSelectChange()"></select>
+        </div>
+        <div class="form-group">
+          <label>Reason / Evidence</label>
+          <textarea id="req-description" required
+            placeholder="Why should these stats change? Cite specific games or plays."></textarea>
+        </div>
+        <h4 class="proposed-title">Proposed Stats</h4>
+        <div id="stat-inputs-container" class="stat-inputs-dynamic">
+          <p class="stat-inputs-placeholder">Select a player above to edit stats</p>
+        </div>
+        <button type="submit" class="btn btn-primary btn-full">Submit Request</button>
+      </form>
+    </div>
+  </div>
+
+  <!-- New Player Request Modal -->
+  <div id="new-player-modal" class="modal" onclick="closeModal(event)">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h3>Request New Player</h3>
+        <button class="modal-close" onclick="closeNewPlayerModal()">&times;</button>
+      </div>
+      <form id="new-player-form" onsubmit="submitNewPlayerRequest(event)">
+        <div class="form-group">
+          <label>Your Name</label>
+          <input type="text" id="np-author" required placeholder="Enter your name">
+        </div>
+        <div class="form-group">
+          <label>Player Name</label>
+          <input type="text" id="np-name" required placeholder="Who should join the league?">
+        </div>
+        <div class="form-group">
+          <label>Why should they join?</label>
+          <textarea id="np-description" required placeholder="Make the case. What's their story?"></textarea>
+        </div>
+        <h4 class="proposed-title">Starting Stats <span class="hint">(your best guess)</span></h4>
+        <div class="stat-inputs">
+          <div class="stat-input-group"><label>Placement</label><input type="number" id="np-placement" min="1" max="99"
+              value="50"></div>
+          <div class="stat-input-group"><label>Bowling</label><input type="number" id="np-bowling" min="1" max="99"
+              value="50"></div>
+          <div class="stat-input-group"><label>Defense</label><input type="number" id="np-defense" min="1" max="99"
+              value="50"></div>
+          <div class="stat-input-group"><label>Wall Ball</label><input type="number" id="np-wall_ball" min="1" max="99"
+              value="50"></div>
+          <div class="stat-input-group"><label>Substance Use</label><input type="number" id="np-substance_use" min="1"
+              max="99" value="50"></div>
+          <div class="stat-input-group"><label>Long Game</label><input type="number" id="np-long_game" min="1" max="99"
+              value="50"></div>
+        </div>
+        <button type="submit" class="btn btn-primary btn-full">Submit Request</button>
+      </form>
+    </div>
+  </div>
+
+  <!-- Request Detail Modal -->
+  <div id="request-detail-modal" class="modal" onclick="closeModal(event)">
+    <div class="modal-content modal-wide">
+      <div class="modal-header">
+        <h3 id="detail-title"></h3>
+        <button class="modal-close" onclick="closeDetailModal()">&times;</button>
+      </div>
+      <div id="detail-body"></div>
+    </div>
+  </div>
+
+  <!-- Hidden file input for photo uploads -->
+  <input type="file" id="photo-upload-input" accept="image/*" style="display:none" onchange="handlePhotoUpload(event)">
+
+  <!-- Admin Login Prompt -->
+  <div id="admin-login" class="admin-login hidden">
+    <div class="admin-login-inner">
+      <input type="password" id="admin-key-input" placeholder="Enter admin key"
+             onkeypress="if(event.key==='Enter')attemptAdminLogin()">
+      <button class="btn btn-admin-verify" onclick="attemptAdminLogin()">Enter</button>
+      <button class="btn btn-admin-cancel" onclick="cancelAdminLogin()">Cancel</button>
+      <span id="admin-login-error" class="admin-login-error hidden">Wrong key</span>
+    </div>
+  </div>
+
+  <!-- Admin Active Bar -->
+  <div id="admin-bar" class="admin-bar hidden">
+    <div class="admin-inner">
+      <div class="admin-indicator">ADMIN MODE ACTIVE</div>
+      <button class="btn btn-admin-exit" onclick="exitAdminMode()">Exit Admin</button>
+    </div>
+  </div>
+
+  <script src="/static/app.js"></script>
+</body>
+
+</html>

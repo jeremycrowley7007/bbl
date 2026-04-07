@@ -1,0 +1,694 @@
+let players = [];
+let currentTab = "open";
+let adminMode = false;
+let currentDetailReqId = null;
+let photoUploadPlayerId = null;
+
+const STAT_NAMES = {
+  placement: "PLC",
+  bowling: "BWL",
+  defense: "DEF",
+  wall_ball: "WBL",
+  substance_use: "SUB",
+  long_game: "LNG",
+};
+
+const STAT_FULL = {
+  placement: "Placement",
+  bowling: "Bowling",
+  defense: "Defense",
+  wall_ball: "Wall Ball",
+  substance_use: "Substance Use",
+  long_game: "Long Game",
+};
+
+const STAT_DESC = {
+  placement: "Accuracy when laying the ball near the pallino",
+  bowling: "Power and consistency on approach throws",
+  defense: "Ability to knock opponents out of position",
+  wall_ball: "Bank shots and using the court edges",
+  substance_use: "Performance enhancement via beverages",
+  long_game: "Distance throws and strategic thinking",
+};
+
+function getStoredName() {
+  return localStorage.getItem("bocce_name") || "";
+}
+
+function setStoredName(name) {
+  localStorage.setItem("bocce_name", name);
+}
+
+function statColor(val) {
+  if (val >= 75) return "high";
+  if (val >= 60) return "mid";
+  return "low";
+}
+
+function timeAgo(dateStr) {
+  const d = new Date(dateStr + "Z");
+  const now = new Date();
+  const diff = (now - d) / 1000;
+  if (diff < 60) return "just now";
+  if (diff < 3600) return Math.floor(diff / 60) + "m ago";
+  if (diff < 86400) return Math.floor(diff / 3600) + "h ago";
+  return Math.floor(diff / 86400) + "d ago";
+}
+
+function getInitials(name) {
+  return name
+    .split(" ")
+    .map((w) => w[0])
+    .join("")
+    .toUpperCase()
+    .slice(0, 2);
+}
+
+// --- Rendering ---
+
+async function loadPlayers() {
+  const res = await fetch("/api/players");
+  players = await res.json();
+  renderPlayerCards();
+  populatePlayerSelect();
+}
+
+function renderPlayerCards() {
+  const grid = document.getElementById("player-cards");
+  const statRows = [
+    ["placement", "wall_ball"],
+    ["bowling", "substance_use"],
+    ["defense", "long_game"],
+  ];
+
+  grid.innerHTML = players
+    .map((p) => {
+      const hasPhoto = p.photo_url && p.photo_url.length > 0;
+      const photoHtml = hasPhoto
+        ? `<img src="${p.photo_url}" alt="${p.name}">`
+        : `<span class="fut-photo-initials">${getInitials(p.name)}</span>`;
+
+      const statsHtml = statRows
+        .map(
+          ([left, right]) => `
+          <div class="fut-stat-row">
+            <div class="fut-stat">
+              <span class="fut-stat-val">${p[left]}</span>
+              <span class="fut-stat-label">${STAT_NAMES[left]}</span>
+            </div>
+            <div class="fut-stat">
+              <span class="fut-stat-val">${p[right]}</span>
+              <span class="fut-stat-label">${STAT_NAMES[right]}</span>
+            </div>
+          </div>`
+        )
+        .join("");
+
+      return `
+      <div class="fut-card">
+        <div class="fut-card-inner">
+          <div class="fut-card-face">
+            <div class="fut-card-name">${p.name}</div>
+            <div class="fut-card-body">
+              <div class="fut-card-meta">
+                <div class="fut-rating">${p.overall}</div>
+                <div class="fut-position">BBL</div>
+              </div>
+              <div class="fut-photo" onclick="triggerPhotoUpload(${p.id})">
+                ${photoHtml}
+                <div class="fut-photo-overlay"><span>+</span></div>
+              </div>
+            </div>
+            <div class="fut-card-divider"></div>
+            <div class="fut-card-stats">
+              ${statsHtml}
+            </div>
+          </div>
+        </div>
+      </div>`;
+    })
+    .join("");
+}
+
+function populatePlayerSelect() {
+  const select = document.getElementById("req-player");
+  select.innerHTML =
+    '<option value="">Select player...</option>' +
+    players.map((p) => `<option value="${p.id}">${p.name}</option>`).join("");
+}
+
+async function loadRequests() {
+  const [openRes, closedRes] = await Promise.all([
+    fetch("/api/requests?status=open"),
+    fetch("/api/requests?status=closed"),
+  ]);
+  const openReqs = await openRes.json();
+  const closedReqs = await closedRes.json();
+
+  document.getElementById("open-count").textContent = openReqs.length;
+  document.getElementById("closed-count").textContent = closedReqs.length;
+
+  const reqs = currentTab === "open" ? openReqs : closedReqs;
+  renderRequests(reqs);
+}
+
+function renderRequests(reqs) {
+  const container = document.getElementById("requests-list");
+
+  if (reqs.length === 0) {
+    container.innerHTML = `
+      <div class="empty-state">
+        <div class="emoji">${currentTab === "open" ? "🎯" : "📋"}</div>
+        <p>${
+          currentTab === "open"
+            ? "No open requests. Think someone's stats need updating?"
+            : "No past requests yet."
+        }</p>
+      </div>`;
+    return;
+  }
+
+  container.innerHTML = reqs
+    .map((r) => {
+      const isNewPlayer = r.request_type === "new_player";
+      const player = players.find((p) => p.id === r.player_id);
+      let statPills = "";
+
+      if (!isNewPlayer && player) {
+        statPills = Object.keys(STAT_NAMES)
+          .map((key) => {
+            const proposed = r[`proposed_${key}`];
+            if (proposed == null) return "";
+            const current = player[key];
+            const diff = proposed - current;
+            if (diff === 0) return "";
+            const cls = diff > 0 ? "up" : "down";
+            const sign = diff > 0 ? "+" : "";
+            return `<span class="stat-change-pill ${cls}">${STAT_FULL[key]} ${sign}${diff}</span>`;
+          })
+          .join("");
+      }
+
+      const tagLabel = isNewPlayer ? "NEW PLAYER" : r.player_name;
+      const tagClass = isNewPlayer ? "request-player-tag new-player" : "request-player-tag";
+
+      const cardStatus = r.status === "open" ? "open" : r.status;
+      const cardLabel = r.status === "approved" ? "Approved" : r.status === "denied" ? "Denied" : r.status;
+
+      return `
+      <div class="request-card ${cardStatus}" onclick="openDetailModal(${r.id})">
+        <div class="request-header">
+          <span class="${tagClass}">${tagLabel}${isNewPlayer ? ": " + escapeHtml(r.proposed_name || r.player_name) : ""}</span>
+          <span class="status-badge ${cardStatus}">${cardLabel}</span>
+        </div>
+        <div class="request-description">${escapeHtml(r.description)}</div>
+        ${statPills ? `<div class="request-stats-preview">${statPills}</div>` : ""}
+        <div class="request-footer">
+          <span>👤 ${escapeHtml(r.requested_by)}</span>
+          <span>👍 ${r.upvote_count}</span>
+          <span>💬 ${r.comment_count}</span>
+          <span>🕐 ${timeAgo(r.created_at)}</span>
+        </div>
+      </div>`;
+    })
+    .join("");
+}
+
+function escapeHtml(text) {
+  const div = document.createElement("div");
+  div.textContent = text;
+  return div.innerHTML;
+}
+
+// --- Photo Upload ---
+
+function triggerPhotoUpload(playerId) {
+  photoUploadPlayerId = playerId;
+  document.getElementById("photo-upload-input").click();
+}
+
+async function handlePhotoUpload(event) {
+  const file = event.target.files[0];
+  if (!file || !photoUploadPlayerId) return;
+
+  const formData = new FormData();
+  formData.append("photo", file);
+
+  const res = await fetch(`/api/players/${photoUploadPlayerId}/photo`, {
+    method: "POST",
+    body: formData,
+  });
+
+  const data = await res.json();
+  if (data.error) {
+    alert(data.error);
+  } else {
+    await loadPlayers();
+  }
+
+  event.target.value = "";
+  photoUploadPlayerId = null;
+}
+
+// --- Request Detail ---
+
+async function openDetailModal(reqId) {
+  currentDetailReqId = reqId;
+  const res = await fetch(`/api/requests/${reqId}`);
+  const r = await res.json();
+  const player = players.find((p) => p.id === r.player_id);
+
+  document.getElementById("detail-title").textContent = `${r.player_name} — Stat Update Request`;
+
+  const storedName = getStoredName();
+  const hasVoted = r.upvoters.includes(storedName);
+
+  let statsHtml = "";
+  if (player) {
+    statsHtml = Object.keys(STAT_NAMES)
+      .map((key) => {
+        const current = player[key];
+        const proposed = r[`proposed_${key}`];
+        if (proposed == null) return "";
+        const diff = proposed - current;
+        const cls = diff > 0 ? "up" : diff < 0 ? "down" : "same";
+        return `
+        <div class="stat-compare-row">
+          <span class="stat-compare-label">${STAT_FULL[key]}</span>
+          <span class="stat-compare-current">${current}</span>
+          <span class="stat-compare-arrow">→</span>
+          <span class="stat-compare-proposed ${cls}">${proposed}</span>
+        </div>`;
+      })
+      .join("");
+  }
+
+  const commentsHtml = r.comments
+    .map(
+      (c) => `
+    <div class="comment">
+      <div class="comment-header">
+        <span class="comment-author">${escapeHtml(c.author)}</span>
+        <span class="comment-time">${timeAgo(c.created_at)}</span>
+      </div>
+      <div class="comment-body">${escapeHtml(c.body)}</div>
+    </div>`
+    )
+    .join("");
+
+  const isNewPlayer = r.request_type === "new_player";
+  let adminHtml = "";
+  if (adminMode && r.status === "open") {
+    const approveLabel = isNewPlayer ? "Add Player & Close" : "Apply & Close";
+    const approveAction = isNewPlayer
+      ? `approveNewPlayer(${r.id})`
+      : `closeRequest(${r.id}, true)`;
+    adminHtml = `
+      <div class="admin-actions">
+        <input type="text" class="admin-note-input" id="admin-note" placeholder="Admin note (optional)">
+      </div>
+      <div class="admin-actions">
+        <button class="btn btn-green" onclick="${approveAction}">${approveLabel}</button>
+        <button class="btn btn-red" onclick="closeRequest(${r.id}, false)">Deny & Close</button>
+      </div>`;
+  }
+
+  let adminNoteHtml = "";
+  if (r.admin_note) {
+    adminNoteHtml = `
+      <div class="admin-note-display">
+        <strong>Admin Note:</strong><br>
+        ${escapeHtml(r.admin_note)}
+      </div>`;
+  }
+
+  const isClosed = r.status !== "open";
+  const statusLabel = r.status === "approved" ? "Approved" : r.status === "denied" ? "Denied" : r.status;
+
+  const actionsHtml = isClosed
+    ? `<div class="detail-actions"><span class="upvote-count-static">👍 ${r.upvote_count}</span></div>`
+    : `<div class="detail-actions">
+        <button class="upvote-btn ${hasVoted ? "voted" : ""}" onclick="toggleUpvote(${r.id})">
+          👍 <span>${r.upvote_count}</span>
+        </button>
+      </div>`;
+
+  const commentFormHtml = isClosed
+    ? ""
+    : `<div class="comment-form">
+        <input type="text" id="comment-author" placeholder="Your name" value="${escapeHtml(storedName)}">
+        <input type="text" id="comment-body" placeholder="Add a comment..." style="flex:2"
+               onkeypress="if(event.key==='Enter')postComment(${r.id})">
+        <button onclick="postComment(${r.id})">Send</button>
+      </div>`;
+
+  const deniedBanner = r.status === "denied"
+    ? `<div class="denied-banner">DENIED</div>`
+    : "";
+
+  document.getElementById("detail-body").innerHTML = `
+    ${deniedBanner}
+    <div class="request-meta" style="margin-bottom:0.75rem;">
+      Requested by <strong>${escapeHtml(r.requested_by)}</strong> · ${timeAgo(r.created_at)}
+      · <span class="status-badge ${r.status}">${statusLabel}</span>
+    </div>
+    <div class="detail-description">${escapeHtml(r.description)}</div>
+    ${statsHtml ? `<div class="detail-stats-compare">${statsHtml}</div>` : ""}
+    ${actionsHtml}
+    ${adminNoteHtml}
+    ${adminHtml}
+    <div class="comments-section">
+      <h4>COMMENTS (${r.comments.length})</h4>
+      ${commentsHtml}
+      ${commentFormHtml}
+    </div>`;
+
+  document.getElementById("request-detail-modal").classList.add("visible");
+}
+
+function closeDetailModal() {
+  document.getElementById("request-detail-modal").classList.remove("visible");
+  currentDetailReqId = null;
+}
+
+// --- Actions ---
+
+async function toggleUpvote(reqId) {
+  let name = getStoredName();
+  if (!name) {
+    name = prompt("Enter your name to vote:");
+    if (!name) return;
+    setStoredName(name);
+  }
+  await fetch(`/api/requests/${reqId}/upvote`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ voter: name }),
+  });
+  openDetailModal(reqId);
+  loadRequests();
+}
+
+async function postComment(reqId) {
+  const authorEl = document.getElementById("comment-author");
+  const bodyEl = document.getElementById("comment-body");
+  const author = authorEl.value.trim();
+  const body = bodyEl.value.trim();
+  if (!author || !body) return;
+
+  setStoredName(author);
+
+  await fetch(`/api/requests/${reqId}/comment`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ author, body }),
+  });
+
+  bodyEl.value = "";
+  openDetailModal(reqId);
+  loadRequests();
+}
+
+async function closeRequest(reqId, applyChanges) {
+  const adminNote = document.getElementById("admin-note")?.value || "";
+
+  const res = await fetch(`/api/requests/${reqId}/close`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      admin_key: adminKey,
+      apply_changes: applyChanges,
+      admin_note: adminNote || "",
+    }),
+  });
+
+  const data = await res.json();
+  if (data.error) {
+    alert(data.error);
+    return;
+  }
+
+  await loadPlayers();
+  await loadRequests();
+  closeDetailModal();
+}
+
+// --- New Request Modal ---
+
+function openNewRequestModal() {
+  const nameInput = document.getElementById("req-author");
+  nameInput.value = getStoredName();
+  document.getElementById("req-player").value = "";
+  renderStatInputs(null);
+  document.getElementById("new-request-modal").classList.add("visible");
+}
+
+function closeNewRequestModal() {
+  document.getElementById("new-request-modal").classList.remove("visible");
+}
+
+function onPlayerSelectChange() {
+  const playerId = parseInt(document.getElementById("req-player").value);
+  const player = players.find((p) => p.id === playerId);
+  renderStatInputs(player);
+}
+
+function renderStatInputs(player) {
+  const container = document.getElementById("stat-inputs-container");
+
+  if (!player) {
+    container.innerHTML = '<p class="stat-inputs-placeholder">Select a player above to edit stats</p>';
+    return;
+  }
+
+  const statFields = ["placement", "bowling", "defense", "wall_ball", "substance_use", "long_game"];
+
+  container.innerHTML = '<div class="stat-inputs">' + statFields.map((key) => {
+    const current = player[key];
+    return `
+      <div class="stat-input-group">
+        <label>${STAT_FULL[key]}</label>
+        <div class="stat-input-row">
+          <span class="stat-current-val">${current}</span>
+          <span class="stat-arrow">→</span>
+          <input type="number" id="req-${key}" min="1" max="99" value="${current}"
+                 data-original="${current}" oninput="updateStatDiff(this)">
+          <span class="stat-diff" id="diff-${key}"></span>
+        </div>
+      </div>`;
+  }).join("") + '</div>';
+}
+
+function updateStatDiff(input) {
+  const original = parseInt(input.dataset.original);
+  const current = parseInt(input.value);
+  const key = input.id.replace("req-", "");
+  const diffEl = document.getElementById(`diff-${key}`);
+
+  if (!diffEl || isNaN(current)) return;
+
+  const diff = current - original;
+  if (diff === 0) {
+    diffEl.textContent = "";
+    diffEl.className = "stat-diff";
+  } else {
+    const sign = diff > 0 ? "+" : "";
+    diffEl.textContent = `${sign}${diff}`;
+    diffEl.className = `stat-diff ${diff > 0 ? "up" : "down"}`;
+  }
+}
+
+async function submitRequest(e) {
+  e.preventDefault();
+
+  const name = document.getElementById("req-author").value.trim();
+  setStoredName(name);
+
+  const playerId = parseInt(document.getElementById("req-player").value);
+  const player = players.find((p) => p.id === playerId);
+
+  const body = {
+    player_id: playerId,
+    requested_by: name,
+    description: document.getElementById("req-description").value.trim(),
+  };
+
+  const statFields = ["placement", "bowling", "defense", "wall_ball", "substance_use", "long_game"];
+  for (const f of statFields) {
+    const input = document.getElementById(`req-${f}`);
+    if (!input) continue;
+    const val = parseInt(input.value);
+    const orig = parseInt(input.dataset.original);
+    if (!isNaN(val) && val !== orig) {
+      body[`proposed_${f}`] = val;
+    }
+  }
+
+  await fetch("/api/requests", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+
+  closeNewRequestModal();
+  document.getElementById("new-request-form").reset();
+  switchTab("open");
+  loadRequests();
+}
+
+// --- Modal Helpers ---
+
+function closeModal(event) {
+  if (event.target === event.currentTarget) {
+    event.target.classList.remove("visible");
+    currentDetailReqId = null;
+  }
+}
+
+// --- Tabs ---
+
+function switchTab(tab) {
+  currentTab = tab;
+  document.querySelectorAll(".tab").forEach((t) => {
+    t.classList.toggle("active", t.dataset.tab === tab);
+  });
+  loadRequests();
+}
+
+// --- Admin ---
+
+let adminKey = "";
+
+function toggleAdminMode() {
+  if (adminMode) {
+    exitAdminMode();
+  } else {
+    showAdminLogin();
+  }
+}
+
+function showAdminLogin() {
+  document.getElementById("admin-login").classList.remove("hidden");
+  document.getElementById("admin-login-error").classList.add("hidden");
+  document.getElementById("admin-key-input").value = "";
+  document.getElementById("admin-key-input").focus();
+}
+
+function cancelAdminLogin() {
+  document.getElementById("admin-login").classList.add("hidden");
+}
+
+async function attemptAdminLogin() {
+  const input = document.getElementById("admin-key-input");
+  const key = input.value.trim();
+  if (!key) return;
+
+  const res = await fetch("/api/admin/verify", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ admin_key: key }),
+  });
+  const data = await res.json();
+
+  if (data.valid) {
+    adminKey = key;
+    adminMode = true;
+    document.getElementById("admin-login").classList.add("hidden");
+    document.getElementById("admin-bar").classList.remove("hidden");
+    document.body.classList.add("admin-active");
+    const btn = document.getElementById("admin-toggle-btn");
+    btn.textContent = "Admin ON";
+    btn.classList.add("admin-on");
+    if (currentDetailReqId) {
+      openDetailModal(currentDetailReqId);
+    }
+  } else {
+    const err = document.getElementById("admin-login-error");
+    err.classList.remove("hidden");
+    input.value = "";
+    input.focus();
+    input.classList.add("shake");
+    setTimeout(() => input.classList.remove("shake"), 500);
+  }
+}
+
+function exitAdminMode() {
+  adminMode = false;
+  adminKey = "";
+  document.getElementById("admin-bar").classList.add("hidden");
+  document.body.classList.remove("admin-active");
+  const btn = document.getElementById("admin-toggle-btn");
+  btn.textContent = "Admin";
+  btn.classList.remove("admin-on");
+  if (currentDetailReqId) {
+    openDetailModal(currentDetailReqId);
+  }
+}
+
+// --- New Player Modal ---
+
+function openNewPlayerModal() {
+  document.getElementById("np-author").value = getStoredName();
+  document.getElementById("new-player-modal").classList.add("visible");
+}
+
+function closeNewPlayerModal() {
+  document.getElementById("new-player-modal").classList.remove("visible");
+}
+
+async function submitNewPlayerRequest(e) {
+  e.preventDefault();
+
+  const name = document.getElementById("np-author").value.trim();
+  setStoredName(name);
+
+  const body = {
+    proposed_name: document.getElementById("np-name").value.trim(),
+    requested_by: name,
+    description: document.getElementById("np-description").value.trim(),
+    proposed_placement: parseInt(document.getElementById("np-placement").value) || 50,
+    proposed_bowling: parseInt(document.getElementById("np-bowling").value) || 50,
+    proposed_defense: parseInt(document.getElementById("np-defense").value) || 50,
+    proposed_wall_ball: parseInt(document.getElementById("np-wall_ball").value) || 50,
+    proposed_substance_use: parseInt(document.getElementById("np-substance_use").value) || 50,
+    proposed_long_game: parseInt(document.getElementById("np-long_game").value) || 50,
+  };
+
+  await fetch("/api/requests/new-player", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+
+  closeNewPlayerModal();
+  document.getElementById("new-player-form").reset();
+  switchTab("open");
+  loadRequests();
+}
+
+async function approveNewPlayer(reqId) {
+  const adminNote = document.getElementById("admin-note")?.value || "";
+
+  const res = await fetch(`/api/requests/${reqId}/approve-player`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ admin_key: adminKey, admin_note: adminNote }),
+  });
+
+  const data = await res.json();
+  if (data.error) {
+    alert(data.error);
+    return;
+  }
+
+  await loadPlayers();
+  await loadRequests();
+  closeDetailModal();
+}
+
+// --- Init ---
+
+document.addEventListener("DOMContentLoaded", () => {
+  loadPlayers();
+  loadRequests();
+});
