@@ -1,0 +1,6 @@
+bocce.db
+bocce.db-shm
+bocce.db-wal
+photos/
+__pycache__/
+*.pyc
