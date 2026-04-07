@@ -4,31 +4,48 @@ let adminMode = false;
 let currentDetailReqId = null;
 let photoUploadPlayerId = null;
 
+let requestCache = {};
+
+function getCookie(name) {
+  const m = document.cookie.match(new RegExp('(?:^|; )' + name + '=([^;]*)'));
+  return m ? decodeURIComponent(m[1]) : null;
+}
+
+function setCookie(name, value) {
+  document.cookie = name + '=' + encodeURIComponent(value) + '; path=/; max-age=31536000; SameSite=Lax';
+}
+
+const sessionVotes = JSON.parse(getCookie('bbl_votes') || '{}');
+
+function saveVotes() {
+  setCookie('bbl_votes', JSON.stringify(sessionVotes));
+}
+
 const STAT_NAMES = {
   placement: "PLC",
   bowling: "BWL",
-  defense: "DEF",
+  tilt_aversion: "TLT",
   wall_ball: "WBL",
   substance_use: "SUB",
-  long_game: "LNG",
+  flair: "FLR",
 };
 
 const STAT_FULL = {
   placement: "Placement",
   bowling: "Bowling",
-  defense: "Defense",
+  tilt_aversion: "Tilt Aversion",
   wall_ball: "Wall Ball",
   substance_use: "Substance Use",
-  long_game: "Long Game",
+  flair: "Flair",
 };
 
 const STAT_DESC = {
   placement: "Accuracy when laying the ball near the pallino",
   bowling: "Power and consistency on approach throws",
-  defense: "Ability to knock opponents out of position",
+  tilt_aversion: "Composure a mature player shows in tough situations",
   wall_ball: "Bank shots and using the court edges",
   substance_use: "Performance enhancement via beverages",
-  long_game: "Distance throws and strategic thinking",
+  flair: "How often they turn a round from -x to +x with their last shot",
 };
 
 function getStoredName() {
@@ -43,6 +60,12 @@ function statColor(val) {
   if (val >= 75) return "high";
   if (val >= 60) return "mid";
   return "low";
+}
+
+function cardTier(overall) {
+  if (overall >= 75) return "gold";
+  if (overall >= 65) return "silver";
+  return "bronze";
 }
 
 function timeAgo(dateStr) {
@@ -78,11 +101,12 @@ function renderPlayerCards() {
   const statRows = [
     ["placement", "wall_ball"],
     ["bowling", "substance_use"],
-    ["defense", "long_game"],
+    ["tilt_aversion", "flair"],
   ];
 
   grid.innerHTML = players
     .map((p) => {
+      const tier = cardTier(p.overall);
       const hasPhoto = p.photo_url && p.photo_url.length > 0;
       const photoHtml = hasPhoto
         ? `<img src="${p.photo_url}" alt="${p.name}">`
@@ -104,17 +128,22 @@ function renderPlayerCards() {
         )
         .join("");
 
+      const adminEditBtn = adminMode
+        ? `<div class="fut-admin-edit" onclick="event.stopPropagation(); openAdminEditModal(${p.id})">EDIT</div>`
+        : "";
+
       return `
-      <div class="fut-card">
+      <div class="fut-card tier-${tier}" onclick="openCardZoom(${p.id})">
         <div class="fut-card-inner">
           <div class="fut-card-face">
+            ${adminEditBtn}
             <div class="fut-card-name">${p.name}</div>
             <div class="fut-card-body">
               <div class="fut-card-meta">
                 <div class="fut-rating">${p.overall}</div>
                 <div class="fut-position">BBL</div>
               </div>
-              <div class="fut-photo" onclick="triggerPhotoUpload(${p.id})">
+              <div class="fut-photo" onclick="event.stopPropagation(); triggerPhotoUpload(${p.id})">
                 ${photoHtml}
                 <div class="fut-photo-overlay"><span>+</span></div>
               </div>
@@ -149,7 +178,13 @@ async function loadRequests() {
   document.getElementById("closed-count").textContent = closedReqs.length;
 
   const reqs = currentTab === "open" ? openReqs : closedReqs;
-  renderRequests(reqs);
+
+  const details = await Promise.all(
+    reqs.map((r) => fetch(`/api/requests/${r.id}`).then((res) => res.json()))
+  );
+  details.forEach((d) => { requestCache[d.id] = d; });
+
+  renderRequests(details);
 }
 
 function renderRequests(reqs) {
@@ -168,56 +203,197 @@ function renderRequests(reqs) {
     return;
   }
 
-  container.innerHTML = reqs
-    .map((r) => {
-      const isNewPlayer = r.request_type === "new_player";
-      const player = players.find((p) => p.id === r.player_id);
-      let statPills = "";
+  container.innerHTML = reqs.map((r) => renderRequestCard(r)).join("");
+}
 
-      if (!isNewPlayer && player) {
-        statPills = Object.keys(STAT_NAMES)
-          .map((key) => {
-            const proposed = r[`proposed_${key}`];
-            if (proposed == null) return "";
-            const current = player[key];
-            const diff = proposed - current;
-            if (diff === 0) return "";
-            const cls = diff > 0 ? "up" : "down";
-            const sign = diff > 0 ? "+" : "";
-            return `<span class="stat-change-pill ${cls}">${STAT_FULL[key]} ${sign}${diff}</span>`;
-          })
-          .join("");
-      }
+function renderRequestCard(r) {
+  const isNewPlayer = r.request_type === "new_player";
+  const player = players.find((p) => p.id === r.player_id);
+  let statPills = "";
 
-      const tagLabel = isNewPlayer ? "NEW PLAYER" : r.player_name;
-      const tagClass = isNewPlayer ? "request-player-tag new-player" : "request-player-tag";
+  if (!isNewPlayer && player) {
+    statPills = Object.keys(STAT_NAMES)
+      .map((key) => {
+        const proposed = r[`proposed_${key}`];
+        if (proposed == null) return "";
+        const current = player[key];
+        const diff = proposed - current;
+        if (diff === 0) return "";
+        const cls = diff > 0 ? "up" : "down";
+        const sign = diff > 0 ? "+" : "";
+        return `<span class="stat-change-pill ${cls}">${STAT_FULL[key]} ${sign}${diff}</span>`;
+      })
+      .join("");
+  }
 
-      const cardStatus = r.status === "open" ? "open" : r.status;
-      const cardLabel = r.status === "approved" ? "Approved" : r.status === "denied" ? "Denied" : r.status;
+  const tagLabel = isNewPlayer ? "NEW PLAYER" : r.player_name;
+  const tagClass = isNewPlayer ? "request-player-tag new-player" : "request-player-tag";
 
-      return `
-      <div class="request-card ${cardStatus}" onclick="openDetailModal(${r.id})">
-        <div class="request-header">
-          <span class="${tagClass}">${tagLabel}${isNewPlayer ? ": " + escapeHtml(r.proposed_name || r.player_name) : ""}</span>
-          <span class="status-badge ${cardStatus}">${cardLabel}</span>
-        </div>
-        <div class="request-description">${escapeHtml(r.description)}</div>
-        ${statPills ? `<div class="request-stats-preview">${statPills}</div>` : ""}
-        <div class="request-footer">
-          <span>👤 ${escapeHtml(r.requested_by)}</span>
-          <span>👍 ${r.upvote_count}</span>
-          <span>💬 ${r.comment_count}</span>
-          <span>🕐 ${timeAgo(r.created_at)}</span>
-        </div>
-      </div>`;
-    })
+  const cardStatus = r.status === "open" ? "open" : r.status;
+  const cardLabel = r.status === "approved" ? "Approved" : r.status === "denied" ? "Denied" : r.status;
+
+  const ups = r.upvote_count || 0;
+  const downs = r.downvote_count || 0;
+  const net = ups - downs;
+  const sv = sessionVotes[r.id] || null;
+
+  const isClosed = r.status !== "open";
+
+  const commentsArr = r.comments || [];
+  const commentsHtml = commentsArr
+    .map(
+      (c) => `
+      <div class="rc-comment">
+        <span class="rc-comment-author">${escapeHtml(c.author)}</span>
+        <span class="rc-comment-body">${escapeHtml(c.body)}</span>
+        <span class="rc-comment-time">${timeAgo(c.created_at)}</span>
+      </div>`
+    )
     .join("");
+
+  const commentFormHtml = isClosed
+    ? ""
+    : `<div class="rc-comment-form" onclick="event.stopPropagation()">
+        <input type="text" id="rc-author-${r.id}" placeholder="Name" value="${escapeHtml(getStoredName())}">
+        <input type="text" id="rc-body-${r.id}" placeholder="Add a comment..."
+               onkeypress="if(event.key==='Enter')postInlineComment(${r.id})">
+        <button onclick="postInlineComment(${r.id})">Reply</button>
+      </div>`;
+
+  const adminHtml = (adminMode && r.status === "open")
+    ? `<div class="rc-admin-actions" onclick="event.stopPropagation()">
+        <input type="text" id="rc-admin-note-${r.id}" class="admin-note-input" placeholder="Admin note (optional)">
+        <div style="display:flex;gap:0.5rem;margin-top:0.4rem;">
+          <button class="btn btn-green" style="flex:1" onclick="${
+            isNewPlayer ? `approveNewPlayer(${r.id})` : `closeRequest(${r.id}, true)`
+          }">${isNewPlayer ? "Add Player & Close" : "Apply & Close"}</button>
+          <button class="btn btn-red" style="flex:1" onclick="closeRequest(${r.id}, false)">Deny</button>
+        </div>
+      </div>`
+    : "";
+
+  const deniedBanner = r.status === "denied"
+    ? `<div class="rc-denied-banner">DENIED</div>`
+    : "";
+
+  let adminNoteHtml = "";
+  if (r.admin_note) {
+    adminNoteHtml = `<div class="admin-note-display" style="margin-top:0.75rem">${escapeHtml(r.admin_note)}</div>`;
+  }
+
+  return `
+  <div class="rc-post ${cardStatus}" id="rc-post-${r.id}">
+    ${deniedBanner}
+    <div class="rc-vote-col" onclick="event.stopPropagation()">
+      <button class="rc-vote-btn rc-up ${sv === "up" ? "active" : ""} ${isClosed ? "disabled" : ""}"
+              onclick="${isClosed ? "" : `inlineVote(${r.id},'up')`}" ${isClosed ? "disabled" : ""}>▲</button>
+      <span class="rc-vote-score ${net > 0 ? "positive" : net < 0 ? "negative" : ""}">${net}</span>
+      <button class="rc-vote-btn rc-down ${sv === "down" ? "active" : ""} ${isClosed ? "disabled" : ""}"
+              onclick="${isClosed ? "" : `inlineVote(${r.id},'down')`}" ${isClosed ? "disabled" : ""}>▼</button>
+    </div>
+    <div class="rc-body">
+      <div class="rc-header">
+        <span class="${tagClass}">${tagLabel}${isNewPlayer ? ": " + escapeHtml(r.proposed_name || r.player_name) : ""}</span>
+        <span class="rc-meta">by ${escapeHtml(r.requested_by)} · ${timeAgo(r.created_at)}</span>
+        <span class="status-badge ${cardStatus}" style="margin-left:auto">${cardLabel}</span>
+      </div>
+      <div class="rc-description">${escapeHtml(r.description)}</div>
+      ${statPills ? `<div class="request-stats-preview">${statPills}</div>` : ""}
+      ${adminNoteHtml}
+      ${adminHtml}
+      <div class="rc-comments-section">
+        ${commentsArr.length > 0 ? `<div class="rc-comments">${commentsHtml}</div>` : ""}
+        ${commentFormHtml}
+      </div>
+    </div>
+  </div>`;
 }
 
 function escapeHtml(text) {
   const div = document.createElement("div");
   div.textContent = text;
   return div.innerHTML;
+}
+
+// --- Card Zoom ---
+
+function openCardZoom(playerId) {
+  const p = players.find((pl) => pl.id === playerId);
+  if (!p) return;
+
+  const tier = cardTier(p.overall);
+  const hasPhoto = p.photo_url && p.photo_url.length > 0;
+  const photoHtml = hasPhoto
+    ? `<img src="${p.photo_url}" alt="${p.name}">`
+    : `<span class="fut-photo-initials">${getInitials(p.name)}</span>`;
+
+  const statRows = [
+    ["placement", "wall_ball"],
+    ["bowling", "substance_use"],
+    ["tilt_aversion", "flair"],
+  ];
+
+  const statsHtml = statRows
+    .map(
+      ([left, right]) => `
+      <div class="fut-stat-row">
+        <div class="fut-stat">
+          <span class="fut-stat-val">${p[left]}</span>
+          <span class="fut-stat-label">${STAT_NAMES[left]}</span>
+        </div>
+        <div class="fut-stat">
+          <span class="fut-stat-val">${p[right]}</span>
+          <span class="fut-stat-label">${STAT_NAMES[right]}</span>
+        </div>
+      </div>`
+    )
+    .join("");
+
+  const statDescHtml = Object.keys(STAT_NAMES)
+    .map(
+      (key) => `
+      <div class="zoom-stat-desc-row">
+        <span class="zoom-stat-desc-abbr">${STAT_NAMES[key]}</span>
+        <span class="zoom-stat-desc-val">${p[key]}</span>
+        <span class="zoom-stat-desc-name">${STAT_FULL[key]}</span>
+        <span class="zoom-stat-desc-text">${STAT_DESC[key]}</span>
+      </div>`
+    )
+    .join("");
+
+  const overlay = document.getElementById("card-zoom-overlay");
+  overlay.innerHTML = `
+    <div class="card-zoom-content" onclick="event.stopPropagation()">
+      <div class="card-zoom-card fut-card tier-${tier}">
+        <div class="fut-card-inner">
+          <div class="fut-card-face">
+            <div class="fut-card-name">${p.name}</div>
+            <div class="fut-card-body">
+              <div class="fut-card-meta">
+                <div class="fut-rating">${p.overall}</div>
+                <div class="fut-position">BBL</div>
+              </div>
+              <div class="fut-photo">
+                ${photoHtml}
+              </div>
+            </div>
+            <div class="fut-card-divider"></div>
+            <div class="fut-card-stats">
+              ${statsHtml}
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="card-zoom-details">
+        ${statDescHtml}
+      </div>
+    </div>`;
+
+  overlay.classList.add("visible");
+}
+
+function closeCardZoom() {
+  document.getElementById("card-zoom-overlay").classList.remove("visible");
 }
 
 // --- Photo Upload ---
@@ -262,6 +438,7 @@ async function openDetailModal(reqId) {
 
   const storedName = getStoredName();
   const hasVoted = r.upvoters.includes(storedName);
+  const hasDownvoted = (r.downvoters || []).includes(storedName);
 
   let statsHtml = "";
   if (player) {
@@ -326,10 +503,16 @@ async function openDetailModal(reqId) {
   const statusLabel = r.status === "approved" ? "Approved" : r.status === "denied" ? "Denied" : r.status;
 
   const actionsHtml = isClosed
-    ? `<div class="detail-actions"><span class="upvote-count-static">👍 ${r.upvote_count}</span></div>`
+    ? `<div class="detail-actions">
+        <span class="upvote-count-static">👍 ${r.upvote_count}</span>
+        <span class="upvote-count-static">👎 ${r.downvote_count || 0}</span>
+      </div>`
     : `<div class="detail-actions">
         <button class="upvote-btn ${hasVoted ? "voted" : ""}" onclick="toggleUpvote(${r.id})">
           👍 <span>${r.upvote_count}</span>
+        </button>
+        <button class="downvote-btn ${hasDownvoted ? "voted" : ""}" onclick="toggleDownvote(${r.id})">
+          👎 <span>${r.downvote_count || 0}</span>
         </button>
       </div>`;
 
@@ -373,20 +556,76 @@ function closeDetailModal() {
 
 // --- Actions ---
 
-async function toggleUpvote(reqId) {
-  let name = getStoredName();
-  if (!name) {
-    name = prompt("Enter your name to vote:");
-    if (!name) return;
-    setStoredName(name);
+const sessionVoterName = getCookie('bbl_voter') || ("anon_" + Math.random().toString(36).slice(2, 10));
+setCookie('bbl_voter', sessionVoterName);
+
+async function inlineVote(reqId, direction) {
+  const current = sessionVotes[reqId];
+  if (current === direction) return;
+
+  if (current) {
+    const removeEndpoint = current === "up" ? "upvote" : "downvote";
+    await fetch(`/api/requests/${reqId}/${removeEndpoint}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ voter: sessionVoterName }),
+    });
   }
-  await fetch(`/api/requests/${reqId}/upvote`, {
+
+  const addEndpoint = direction === "up" ? "upvote" : "downvote";
+  await fetch(`/api/requests/${reqId}/${addEndpoint}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ voter: name }),
+    body: JSON.stringify({ voter: sessionVoterName }),
   });
-  openDetailModal(reqId);
-  loadRequests();
+
+  sessionVotes[reqId] = direction;
+  saveVotes();
+  await refreshSingleRequest(reqId);
+}
+
+async function postInlineComment(reqId) {
+  const authorEl = document.getElementById(`rc-author-${reqId}`);
+  const bodyEl = document.getElementById(`rc-body-${reqId}`);
+  const author = authorEl.value.trim();
+  const body = bodyEl.value.trim();
+  if (!author || !body) return;
+
+  setStoredName(author);
+
+  await fetch(`/api/requests/${reqId}/comment`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ author, body }),
+  });
+
+  await refreshSingleRequest(reqId);
+}
+
+async function refreshSingleRequest(reqId) {
+  const res = await fetch(`/api/requests/${reqId}`);
+  const r = await res.json();
+  requestCache[r.id] = r;
+
+  const el = document.getElementById(`rc-post-${reqId}`);
+  if (el) {
+    el.outerHTML = renderRequestCard(r);
+  }
+
+  const [openRes, closedRes] = await Promise.all([
+    fetch("/api/requests?status=open"),
+    fetch("/api/requests?status=closed"),
+  ]);
+  document.getElementById("open-count").textContent = (await openRes.json()).length;
+  document.getElementById("closed-count").textContent = (await closedRes.json()).length;
+}
+
+async function toggleUpvote(reqId) {
+  await inlineVote(reqId, "up");
+}
+
+async function toggleDownvote(reqId) {
+  await inlineVote(reqId, "down");
 }
 
 async function postComment(reqId) {
@@ -410,7 +649,9 @@ async function postComment(reqId) {
 }
 
 async function closeRequest(reqId, applyChanges) {
-  const adminNote = document.getElementById("admin-note")?.value || "";
+  const adminNote =
+    document.getElementById(`rc-admin-note-${reqId}`)?.value ||
+    document.getElementById("admin-note")?.value || "";
 
   const res = await fetch(`/api/requests/${reqId}/close`, {
     method: "POST",
@@ -461,7 +702,7 @@ function renderStatInputs(player) {
     return;
   }
 
-  const statFields = ["placement", "bowling", "defense", "wall_ball", "substance_use", "long_game"];
+  const statFields = Object.keys(STAT_NAMES);
 
   container.innerHTML = '<div class="stat-inputs">' + statFields.map((key) => {
     const current = player[key];
@@ -505,7 +746,6 @@ async function submitRequest(e) {
   setStoredName(name);
 
   const playerId = parseInt(document.getElementById("req-player").value);
-  const player = players.find((p) => p.id === playerId);
 
   const body = {
     player_id: playerId,
@@ -513,7 +753,7 @@ async function submitRequest(e) {
     description: document.getElementById("req-description").value.trim(),
   };
 
-  const statFields = ["placement", "bowling", "defense", "wall_ball", "substance_use", "long_game"];
+  const statFields = Object.keys(STAT_NAMES);
   for (const f of statFields) {
     const input = document.getElementById(`req-${f}`);
     if (!input) continue;
@@ -599,6 +839,7 @@ async function attemptAdminLogin() {
     const btn = document.getElementById("admin-toggle-btn");
     btn.textContent = "Admin ON";
     btn.classList.add("admin-on");
+    renderPlayerCards();
     if (currentDetailReqId) {
       openDetailModal(currentDetailReqId);
     }
@@ -620,9 +861,119 @@ function exitAdminMode() {
   const btn = document.getElementById("admin-toggle-btn");
   btn.textContent = "Admin";
   btn.classList.remove("admin-on");
+  renderPlayerCards();
   if (currentDetailReqId) {
     openDetailModal(currentDetailReqId);
   }
+}
+
+// --- Admin Reset All Stats ---
+
+async function resetAllStats() {
+  const input = prompt("Reset ALL players to what baseline? (1–99)", "70");
+  if (input === null) return;
+  const baseline = parseInt(input);
+  if (isNaN(baseline) || baseline < 1 || baseline > 99) {
+    alert("Enter a number between 1 and 99.");
+    return;
+  }
+  if (!confirm(`This will set every stat for every player to ${baseline}. Are you sure?`)) return;
+
+  const res = await fetch("/api/admin/reset-stats", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ admin_key: adminKey, baseline }),
+  });
+  const data = await res.json();
+  if (data.error) {
+    alert(data.error);
+    return;
+  }
+  await loadPlayers();
+}
+
+// --- Admin Edit Player ---
+
+function openAdminEditModal(playerId) {
+  const player = players.find((p) => p.id === playerId);
+  if (!player) return;
+
+  const statFields = Object.keys(STAT_NAMES);
+  const statsHtml = statFields
+    .map(
+      (key) => `
+    <div class="stat-input-group">
+      <label>${STAT_FULL[key]}</label>
+      <input type="number" id="admin-edit-${key}" min="1" max="99" value="${player[key]}">
+    </div>`
+    )
+    .join("");
+
+  document.getElementById("admin-edit-title").textContent = `Edit: ${player.name}`;
+  document.getElementById("admin-edit-body").innerHTML = `
+    <div class="form-group">
+      <label>Player Name</label>
+      <input type="text" id="admin-edit-name" value="${escapeHtml(player.name)}">
+    </div>
+    <h4 class="proposed-title">Stats</h4>
+    <div class="stat-inputs">
+      ${statsHtml}
+    </div>
+    <button class="btn btn-primary btn-full" onclick="saveAdminEdit(${player.id})">Save Changes</button>
+    <button class="btn btn-red btn-full" style="margin-top:0.5rem" onclick="deletePlayer(${player.id})">Delete Player</button>
+  `;
+
+  document.getElementById("admin-edit-modal").classList.add("visible");
+}
+
+function closeAdminEditModal() {
+  document.getElementById("admin-edit-modal").classList.remove("visible");
+}
+
+async function saveAdminEdit(playerId) {
+  const body = { admin_key: adminKey };
+  const nameVal = document.getElementById("admin-edit-name").value.trim();
+  if (nameVal) body.name = nameVal;
+
+  const statFields = Object.keys(STAT_NAMES);
+  for (const f of statFields) {
+    const val = parseInt(document.getElementById(`admin-edit-${f}`).value);
+    if (!isNaN(val)) body[f] = val;
+  }
+
+  const res = await fetch(`/api/players/${playerId}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+
+  const data = await res.json();
+  if (data.error) {
+    alert(data.error);
+    return;
+  }
+
+  closeAdminEditModal();
+  await loadPlayers();
+}
+
+async function deletePlayer(playerId) {
+  if (!confirm("Are you sure you want to delete this player? This cannot be undone.")) return;
+
+  const res = await fetch(`/api/players/${playerId}`, {
+    method: "DELETE",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ admin_key: adminKey }),
+  });
+
+  const data = await res.json();
+  if (data.error) {
+    alert(data.error);
+    return;
+  }
+
+  closeAdminEditModal();
+  await loadPlayers();
 }
 
 // --- New Player Modal ---
@@ -648,10 +999,10 @@ async function submitNewPlayerRequest(e) {
     description: document.getElementById("np-description").value.trim(),
     proposed_placement: parseInt(document.getElementById("np-placement").value) || 50,
     proposed_bowling: parseInt(document.getElementById("np-bowling").value) || 50,
-    proposed_defense: parseInt(document.getElementById("np-defense").value) || 50,
+    proposed_tilt_aversion: parseInt(document.getElementById("np-tilt_aversion").value) || 50,
     proposed_wall_ball: parseInt(document.getElementById("np-wall_ball").value) || 50,
     proposed_substance_use: parseInt(document.getElementById("np-substance_use").value) || 50,
-    proposed_long_game: parseInt(document.getElementById("np-long_game").value) || 50,
+    proposed_flair: parseInt(document.getElementById("np-flair").value) || 50,
   };
 
   await fetch("/api/requests/new-player", {
@@ -691,4 +1042,13 @@ async function approveNewPlayer(reqId) {
 document.addEventListener("DOMContentLoaded", () => {
   loadPlayers();
   loadRequests();
+});
+
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape") {
+    const zoom = document.getElementById("card-zoom-overlay");
+    if (zoom && zoom.classList.contains("visible")) {
+      closeCardZoom();
+    }
+  }
 });

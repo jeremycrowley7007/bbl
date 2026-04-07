@@ -36,10 +36,10 @@
       <p class="stat-legend">
         <span><b>PLC</b> Placement</span>
         <span><b>BWL</b> Bowling</span>
-        <span><b>DEF</b> Defense</span>
+        <span><b>TLT</b> Tilt Aversion</span>
         <span><b>WBL</b> Wall Ball</span>
         <span><b>SUB</b> Substance Use</span>
-        <span><b>LNG</b> Long Game</span>
+        <span><b>FLR</b> Flair</span>
       </p>
       <div id="player-cards" class="player-grid"></div>
     </section>
@@ -121,13 +121,13 @@
               value="50"></div>
           <div class="stat-input-group"><label>Bowling</label><input type="number" id="np-bowling" min="1" max="99"
               value="50"></div>
-          <div class="stat-input-group"><label>Defense</label><input type="number" id="np-defense" min="1" max="99"
-              value="50"></div>
+          <div class="stat-input-group"><label>Tilt Aversion</label><input type="number" id="np-tilt_aversion" min="1"
+              max="99" value="50"></div>
           <div class="stat-input-group"><label>Wall Ball</label><input type="number" id="np-wall_ball" min="1" max="99"
               value="50"></div>
           <div class="stat-input-group"><label>Substance Use</label><input type="number" id="np-substance_use" min="1"
               max="99" value="50"></div>
-          <div class="stat-input-group"><label>Long Game</label><input type="number" id="np-long_game" min="1" max="99"
+          <div class="stat-input-group"><label>Flair</label><input type="number" id="np-flair" min="1" max="99"
               value="50"></div>
         </div>
         <button type="submit" class="btn btn-primary btn-full">Submit Request</button>
@@ -145,6 +145,20 @@
       <div id="detail-body"></div>
     </div>
   </div>
+
+  <!-- Admin Edit Player Modal -->
+  <div id="admin-edit-modal" class="modal" onclick="closeModal(event)">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h3 id="admin-edit-title">Edit Player</h3>
+        <button class="modal-close" onclick="closeAdminEditModal()">&times;</button>
+      </div>
+      <div id="admin-edit-body"></div>
+    </div>
+  </div>
+
+  <!-- Card Zoom Overlay -->
+  <div id="card-zoom-overlay" class="card-zoom-overlay" onclick="closeCardZoom()"></div>
 
   <!-- Hidden file input for photo uploads -->
   <input type="file" id="photo-upload-input" accept="image/*" style="display:none" onchange="handlePhotoUpload(event)">
@@ -164,6 +178,7 @@
   <div id="admin-bar" class="admin-bar hidden">
     <div class="admin-inner">
       <div class="admin-indicator">ADMIN MODE ACTIVE</div>
+      <button class="btn btn-admin-action" onclick="resetAllStats()">Reset All Stats</button>
       <button class="btn btn-admin-exit" onclick="exitAdminMode()">Exit Admin</button>
     </div>
   </div>

@@ -13,6 +13,8 @@ PHOTO_DIR = os.path.join(DATA_DIR, "photos")
 ADMIN_KEY = os.environ.get("ADMIN_KEY", "bocce-admin-2024")
 ALLOWED_EXTENSIONS = {"jpg", "jpeg", "png", "gif", "webp"}
 
+STAT_FIELDS = ["placement", "bowling", "tilt_aversion", "wall_ball", "substance_use", "flair"]
+
 os.makedirs(PHOTO_DIR, exist_ok=True)
 
 app = Flask(__name__)
@@ -88,35 +90,60 @@ def init_db():
             FOREIGN KEY (request_id) REFERENCES requests(id),
             UNIQUE(request_id, voter)
         );
+        CREATE TABLE IF NOT EXISTS downvotes (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            request_id INTEGER NOT NULL,
+            voter TEXT NOT NULL,
+            created_at TEXT DEFAULT (datetime('now')),
+            FOREIGN KEY (request_id) REFERENCES requests(id),
+            UNIQUE(request_id, voter)
+        );
     """)
 
+    # Migrate: add new stat columns for existing databases
+    migrations = [
+        "ALTER TABLE players ADD COLUMN tilt_aversion INTEGER DEFAULT 50",
+        "ALTER TABLE players ADD COLUMN flair INTEGER DEFAULT 50",
+        "ALTER TABLE requests ADD COLUMN proposed_tilt_aversion INTEGER",
+        "ALTER TABLE requests ADD COLUMN proposed_flair INTEGER",
+    ]
+    for sql in migrations:
+        try:
+            db.execute(sql)
+        except sqlite3.OperationalError:
+            pass
+
+    # Carry over old defense→tilt_aversion and long_game→flair for existing rows
+    db.execute("UPDATE players SET tilt_aversion = defense WHERE tilt_aversion = 50 AND defense != 50")
+    db.execute("UPDATE players SET flair = long_game WHERE flair = 50 AND long_game != 50")
+
     seed_players = [
-        ("Jeremy", 72, 78, 65, 70, 74, 68),
-        ("Prakash", 68, 62, 75, 71, 66, 73),
-        ("Jackson", 80, 70, 72, 68, 77, 74),
-        ("Joe", 65, 74, 70, 76, 63, 71),
-        ("Zaki", 74, 66, 78, 72, 70, 67),
-        ("Bryce", 70, 72, 67, 74, 72, 76),
+        #       name       PLC  BWL  WBL  SUB  TLT  FLR
+        ("Jeremy",   72, 78, 70, 74, 65, 68),
+        ("Prakash",  68, 62, 71, 66, 75, 73),
+        ("Jackson",  80, 70, 68, 77, 72, 74),
+        ("Joe",      65, 74, 76, 63, 70, 71),
+        ("Zaki",     74, 66, 72, 70, 78, 67),
+        ("Bryce",    70, 72, 74, 72, 67, 76),
     ]
 
-    for name, pl, bo, de, wb, su, lg in seed_players:
+    for name, pl, bo, wb, su, ta, fl in seed_players:
         existing = db.execute("SELECT id FROM players WHERE name=?", (name,)).fetchone()
         if not existing:
             db.execute(
-                "INSERT INTO players (name, placement, bowling, defense, wall_ball, substance_use, long_game) VALUES (?,?,?,?,?,?,?)",
-                (name, pl, bo, de, wb, su, lg),
+                "INSERT INTO players (name, placement, bowling, wall_ball, substance_use, tilt_aversion, flair) VALUES (?,?,?,?,?,?,?)",
+                (name, pl, bo, wb, su, ta, fl),
             )
     db.commit()
     db.close()
 
 
-# Idempotent — safe to call on every boot (gunicorn or local)
 init_db()
 
 
 def player_to_dict(row):
     d = dict(row)
-    stats = [d["placement"], d["bowling"], d["defense"], d["wall_ball"], d["substance_use"], d["long_game"]]
+    stats = [d[f] for f in STAT_FIELDS]
     d["overall"] = round(sum(stats) / len(stats))
     return d
 
@@ -147,6 +174,24 @@ def api_verify_admin():
     return jsonify({"valid": False}), 401
 
 
+@app.route("/api/admin/reset-stats", methods=["POST"])
+def api_reset_stats():
+    data = request.json
+    if data.get("admin_key") != ADMIN_KEY:
+        return jsonify({"error": "Unauthorized"}), 403
+
+    baseline = int(data.get("baseline", 70))
+    baseline = max(1, min(99, baseline))
+
+    db = get_db()
+    db.execute(
+        "UPDATE players SET placement=?, bowling=?, tilt_aversion=?, wall_ball=?, substance_use=?, flair=?",
+        (baseline, baseline, baseline, baseline, baseline, baseline),
+    )
+    db.commit()
+    return jsonify({"success": True, "baseline": baseline})
+
+
 # ---------------------------------------------------------------------------
 # Routes — players API
 # ---------------------------------------------------------------------------
@@ -157,6 +202,38 @@ def api_players():
     rows = db.execute("SELECT * FROM players ORDER BY id").fetchall()
     players = [player_to_dict(r) for r in rows]
     return jsonify(players)
+
+
+@app.route("/api/players", methods=["POST"])
+def api_create_player():
+    data = request.json
+    if data.get("admin_key") != ADMIN_KEY:
+        return jsonify({"error": "Unauthorized"}), 403
+
+    name = data.get("name", "").strip()
+    if not name:
+        return jsonify({"error": "Name is required"}), 400
+
+    db = get_db()
+    try:
+        db.execute(
+            "INSERT INTO players (name, placement, bowling, tilt_aversion, wall_ball, substance_use, flair) VALUES (?,?,?,?,?,?,?)",
+            (
+                name,
+                data.get("placement", 50),
+                data.get("bowling", 50),
+                data.get("tilt_aversion", 50),
+                data.get("wall_ball", 50),
+                data.get("substance_use", 50),
+                data.get("flair", 50),
+            ),
+        )
+        db.commit()
+    except sqlite3.IntegrityError:
+        return jsonify({"error": "Player already exists"}), 409
+
+    row = db.execute("SELECT * FROM players WHERE name=?", (name,)).fetchone()
+    return jsonify(player_to_dict(row)), 201
 
 
 @app.route("/api/players/<int:player_id>", methods=["PUT"])
@@ -170,7 +247,7 @@ def api_update_player(player_id):
     if not player:
         return jsonify({"error": "Player not found"}), 404
 
-    fields = ["placement", "bowling", "defense", "wall_ball", "substance_use", "long_game", "photo_url"]
+    fields = ["name"] + STAT_FIELDS + ["photo_url"]
     updates = []
     values = []
     for f in fields:
@@ -185,6 +262,22 @@ def api_update_player(player_id):
 
     row = db.execute("SELECT * FROM players WHERE id=?", (player_id,)).fetchone()
     return jsonify(player_to_dict(row))
+
+
+@app.route("/api/players/<int:player_id>", methods=["DELETE"])
+def api_delete_player(player_id):
+    data = request.json
+    if data.get("admin_key") != ADMIN_KEY:
+        return jsonify({"error": "Unauthorized"}), 403
+
+    db = get_db()
+    player = db.execute("SELECT * FROM players WHERE id=?", (player_id,)).fetchone()
+    if not player:
+        return jsonify({"error": "Player not found"}), 404
+
+    db.execute("DELETE FROM players WHERE id=?", (player_id,))
+    db.commit()
+    return jsonify({"success": True})
 
 
 @app.route("/api/players/<int:player_id>/photo", methods=["POST"])
@@ -246,6 +339,9 @@ def api_get_requests():
         d["upvote_count"] = db.execute(
             "SELECT COUNT(*) FROM upvotes WHERE request_id=?", (d["id"],)
         ).fetchone()[0]
+        d["downvote_count"] = db.execute(
+            "SELECT COUNT(*) FROM downvotes WHERE request_id=?", (d["id"],)
+        ).fetchone()[0]
         d["comment_count"] = db.execute(
             "SELECT COUNT(*) FROM comments WHERE request_id=?", (d["id"],)
         ).fetchone()[0]
@@ -265,8 +361,8 @@ def api_create_request():
     db.execute(
         """INSERT INTO requests
            (player_id, requested_by, description,
-            proposed_placement, proposed_bowling, proposed_defense,
-            proposed_wall_ball, proposed_substance_use, proposed_long_game)
+            proposed_placement, proposed_bowling, proposed_tilt_aversion,
+            proposed_wall_ball, proposed_substance_use, proposed_flair)
            VALUES (?,?,?,?,?,?,?,?,?)""",
         (
             data["player_id"],
@@ -274,10 +370,10 @@ def api_create_request():
             data.get("description", ""),
             data.get("proposed_placement"),
             data.get("proposed_bowling"),
-            data.get("proposed_defense"),
+            data.get("proposed_tilt_aversion"),
             data.get("proposed_wall_ball"),
             data.get("proposed_substance_use"),
-            data.get("proposed_long_game"),
+            data.get("proposed_flair"),
         ),
     )
     db.commit()
@@ -296,8 +392,8 @@ def api_create_new_player_request():
     db.execute(
         """INSERT INTO requests
            (request_type, proposed_name, requested_by, description,
-            proposed_placement, proposed_bowling, proposed_defense,
-            proposed_wall_ball, proposed_substance_use, proposed_long_game)
+            proposed_placement, proposed_bowling, proposed_tilt_aversion,
+            proposed_wall_ball, proposed_substance_use, proposed_flair)
            VALUES ('new_player',?,?,?,?,?,?,?,?,?)""",
         (
             proposed_name,
@@ -305,10 +401,10 @@ def api_create_new_player_request():
             data.get("description", ""),
             data.get("proposed_placement", 50),
             data.get("proposed_bowling", 50),
-            data.get("proposed_defense", 50),
+            data.get("proposed_tilt_aversion", 50),
             data.get("proposed_wall_ball", 50),
             data.get("proposed_substance_use", 50),
-            data.get("proposed_long_game", 50),
+            data.get("proposed_flair", 50),
         ),
     )
     db.commit()
@@ -328,16 +424,16 @@ def api_approve_new_player(req_id):
 
     try:
         db.execute(
-            """INSERT INTO players (name, placement, bowling, defense, wall_ball, substance_use, long_game)
+            """INSERT INTO players (name, placement, bowling, tilt_aversion, wall_ball, substance_use, flair)
                VALUES (?,?,?,?,?,?,?)""",
             (
                 req["proposed_name"],
                 req["proposed_placement"] or 50,
                 req["proposed_bowling"] or 50,
-                req["proposed_defense"] or 50,
+                req["proposed_tilt_aversion"] or 50,
                 req["proposed_wall_ball"] or 50,
                 req["proposed_substance_use"] or 50,
-                req["proposed_long_game"] or 50,
+                req["proposed_flair"] or 50,
             ),
         )
     except sqlite3.IntegrityError:
@@ -367,6 +463,9 @@ def api_get_request(req_id):
     d["upvote_count"] = db.execute(
         "SELECT COUNT(*) FROM upvotes WHERE request_id=?", (req_id,)
     ).fetchone()[0]
+    d["downvote_count"] = db.execute(
+        "SELECT COUNT(*) FROM downvotes WHERE request_id=?", (req_id,)
+    ).fetchone()[0]
 
     comments = db.execute(
         "SELECT * FROM comments WHERE request_id=? ORDER BY created_at ASC", (req_id,)
@@ -377,6 +476,11 @@ def api_get_request(req_id):
         "SELECT voter FROM upvotes WHERE request_id=?", (req_id,)
     ).fetchall()
     d["upvoters"] = [u["voter"] for u in upvoters]
+
+    downvoters = db.execute(
+        "SELECT voter FROM downvotes WHERE request_id=?", (req_id,)
+    ).fetchall()
+    d["downvoters"] = [u["voter"] for u in downvoters]
 
     return jsonify(d)
 
@@ -395,10 +499,9 @@ def api_close_request(req_id):
     resolution = "denied"
     if data.get("apply_changes"):
         resolution = "approved"
-        stat_fields = ["placement", "bowling", "defense", "wall_ball", "substance_use", "long_game"]
         updates = []
         values = []
-        for f in stat_fields:
+        for f in STAT_FIELDS:
             proposed = req[f"proposed_{f}"]
             if proposed is not None:
                 updates.append(f"{f}=?")
@@ -441,6 +544,25 @@ def api_upvote(req_id):
     except sqlite3.IntegrityError:
         db.execute(
             "DELETE FROM upvotes WHERE request_id=? AND voter=?", (req_id, voter)
+        )
+        db.commit()
+        return jsonify({"success": True, "removed": True})
+
+
+@app.route("/api/requests/<int:req_id>/downvote", methods=["POST"])
+def api_downvote(req_id):
+    data = request.json
+    voter = data.get("voter", "Anonymous")
+    db = get_db()
+    try:
+        db.execute(
+            "INSERT INTO downvotes (request_id, voter) VALUES (?,?)", (req_id, voter)
+        )
+        db.commit()
+        return jsonify({"success": True}), 201
+    except sqlite3.IntegrityError:
+        db.execute(
+            "DELETE FROM downvotes WHERE request_id=? AND voter=?", (req_id, voter)
         )
         db.commit()
         return jsonify({"success": True, "removed": True})
