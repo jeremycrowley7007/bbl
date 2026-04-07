@@ -681,6 +681,7 @@ main {
 
 .rc-comment-body {
   color: var(--text);
+  font-weight: 500;
 }
 
 .rc-comment-time {
