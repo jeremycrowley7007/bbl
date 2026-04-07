@@ -840,6 +840,7 @@ async function attemptAdminLogin() {
     btn.textContent = "Admin ON";
     btn.classList.add("admin-on");
     renderPlayerCards();
+    loadRequests();
     if (currentDetailReqId) {
       openDetailModal(currentDetailReqId);
     }
@@ -862,6 +863,7 @@ function exitAdminMode() {
   btn.textContent = "Admin";
   btn.classList.remove("admin-on");
   renderPlayerCards();
+  loadRequests();
   if (currentDetailReqId) {
     openDetailModal(currentDetailReqId);
   }
