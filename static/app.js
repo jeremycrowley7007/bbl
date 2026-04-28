@@ -704,7 +704,16 @@ function renderStatInputs(player) {
 
   const statFields = Object.keys(STAT_NAMES);
 
-  container.innerHTML = '<div class="stat-inputs">' + statFields.map((key) => {
+  const overallPreview = `
+    <div class="overall-preview" id="overall-preview">
+      <span class="overall-preview-label">Overall</span>
+      <span class="overall-preview-current" id="overall-current">${player.overall}</span>
+      <span class="stat-arrow">→</span>
+      <span class="overall-preview-proposed" id="overall-proposed">${player.overall}</span>
+      <span class="stat-diff" id="overall-diff"></span>
+    </div>`;
+
+  container.innerHTML = overallPreview + '<div class="stat-inputs">' + statFields.map((key) => {
     const current = player[key];
     return `
       <div class="stat-input-group">
@@ -713,11 +722,45 @@ function renderStatInputs(player) {
           <span class="stat-current-val">${current}</span>
           <span class="stat-arrow">→</span>
           <input type="number" id="req-${key}" min="1" max="99" value="${current}"
-                 data-original="${current}" oninput="updateStatDiff(this)">
+                 data-original="${current}" oninput="updateStatDiff(this); updateOverallPreview()">
           <span class="stat-diff" id="diff-${key}"></span>
         </div>
       </div>`;
   }).join("") + '</div>';
+}
+
+function updateOverallPreview() {
+  const statFields = Object.keys(STAT_NAMES);
+  let total = 0;
+  let count = 0;
+  for (const key of statFields) {
+    const input = document.getElementById(`req-${key}`);
+    if (!input) return;
+    const val = parseInt(input.value);
+    if (isNaN(val)) return;
+    total += val;
+    count++;
+  }
+  const proposed = Math.round(total / count);
+  const currentEl = document.getElementById("overall-current");
+  const proposedEl = document.getElementById("overall-proposed");
+  const diffEl = document.getElementById("overall-diff");
+  if (!currentEl || !proposedEl || !diffEl) return;
+
+  const current = parseInt(currentEl.textContent);
+  proposedEl.textContent = proposed;
+
+  const diff = proposed - current;
+  if (diff === 0) {
+    diffEl.textContent = "";
+    diffEl.className = "stat-diff";
+    proposedEl.className = "overall-preview-proposed";
+  } else {
+    const sign = diff > 0 ? "+" : "";
+    diffEl.textContent = `${sign}${diff}`;
+    diffEl.className = `stat-diff ${diff > 0 ? "up" : "down"}`;
+    proposedEl.className = `overall-preview-proposed ${diff > 0 ? "up" : "down"}`;
+  }
 }
 
 function updateStatDiff(input) {

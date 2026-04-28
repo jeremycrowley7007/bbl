@@ -220,12 +220,12 @@ def api_create_player():
             "INSERT INTO players (name, placement, bowling, tilt_aversion, wall_ball, substance_use, flair) VALUES (?,?,?,?,?,?,?)",
             (
                 name,
-                data.get("placement", 50),
-                data.get("bowling", 50),
-                data.get("tilt_aversion", 50),
-                data.get("wall_ball", 50),
-                data.get("substance_use", 50),
-                data.get("flair", 50),
+                data.get("placement", 62),
+                data.get("bowling", 62),
+                data.get("tilt_aversion", 62),
+                data.get("wall_ball", 62),
+                data.get("substance_use", 62),
+                data.get("flair", 62),
             ),
         )
         db.commit()
@@ -399,12 +399,12 @@ def api_create_new_player_request():
             proposed_name,
             data.get("requested_by", "Anonymous"),
             data.get("description", ""),
-            data.get("proposed_placement", 50),
-            data.get("proposed_bowling", 50),
-            data.get("proposed_tilt_aversion", 50),
-            data.get("proposed_wall_ball", 50),
-            data.get("proposed_substance_use", 50),
-            data.get("proposed_flair", 50),
+            data.get("proposed_placement", 62),
+            data.get("proposed_bowling", 62),
+            data.get("proposed_tilt_aversion", 62),
+            data.get("proposed_wall_ball", 62),
+            data.get("proposed_substance_use", 62),
+            data.get("proposed_flair", 62),
         ),
     )
     db.commit()
@@ -428,12 +428,12 @@ def api_approve_new_player(req_id):
                VALUES (?,?,?,?,?,?,?)""",
             (
                 req["proposed_name"],
-                req["proposed_placement"] or 50,
-                req["proposed_bowling"] or 50,
-                req["proposed_tilt_aversion"] or 50,
-                req["proposed_wall_ball"] or 50,
-                req["proposed_substance_use"] or 50,
-                req["proposed_flair"] or 50,
+                req["proposed_placement"] or 62,
+                req["proposed_bowling"] or 62,
+                req["proposed_tilt_aversion"] or 62,
+                req["proposed_wall_ball"] or 62,
+                req["proposed_substance_use"] or 62,
+                req["proposed_flair"] or 62,
             ),
         )
     except sqlite3.IntegrityError:
