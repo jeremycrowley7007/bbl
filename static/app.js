@@ -1094,6 +1094,444 @@ document.addEventListener("keydown", (e) => {
     const zoom = document.getElementById("card-zoom-overlay");
     if (zoom && zoom.classList.contains("visible")) {
       closeCardZoom();
+      return;
+    }
+    const gd = document.getElementById("game-day-overlay");
+    if (gd && gd.classList.contains("visible")) {
+      closeGameDayPicker();
     }
   }
 });
+
+// =====================================================================
+// GAME DAY — Team Picker
+// =====================================================================
+
+const GD_TEAMS = [
+  { tag: "TEAM",   name: "ROSSO",   color: "#d44a4a" },
+  { tag: "TEAM",   name: "AZZURRI", color: "#3b7dd8" },
+  { tag: "TEAM",   name: "VERDE",   color: "#2a9d6e" },
+  { tag: "TEAM",   name: "VIOLA",   color: "#7c5cbf" },
+];
+
+const gdSelected = new Set();
+let gdGuests = [];
+let gdGuestCounter = 0;
+
+function gdGetTeamSplit(n) {
+  switch (n) {
+    case 2: return [1, 1];
+    case 3: return [1, 2];
+    case 4: return [2, 2];
+    case 5: return [2, 3];
+    case 6: return [3, 3];
+    case 7: return null;
+    case 8: return [2, 2, 2, 2];
+    default:
+      if (n < 2) return null;
+      return [Math.floor(n / 2), Math.ceil(n / 2)];
+  }
+}
+
+function gdFormatString(split) {
+  return split.join(" vs ").toUpperCase();
+}
+
+function openGameDayPicker() {
+  gdSelected.clear();
+  gdGuests = [];
+  gdGuestCounter = 0;
+  document.getElementById("gd-stage-pick").classList.add("active");
+  document.getElementById("gd-stage-reveal").classList.remove("active");
+  document.getElementById("gd-stage-reveal").innerHTML = `
+    <div class="gd-reveal-bg"></div>
+    <div class="gd-reveal-spotlights"></div>
+    <div id="gd-reveal-content" class="gd-reveal-content"></div>
+    <div id="gd-reveal-actions" class="gd-reveal-actions"></div>`;
+  gdRenderPickStage();
+  document.getElementById("game-day-overlay").classList.add("visible");
+  document.body.style.overflow = "hidden";
+}
+
+function closeGameDayPicker() {
+  document.getElementById("game-day-overlay").classList.remove("visible");
+  document.body.style.overflow = "";
+}
+
+function gdRenderPickStage() {
+  const grid = document.getElementById("gd-player-grid");
+  const cards = [
+    ...players.map((p) => gdRenderPickCard(p, false)),
+    ...gdGuests.map((g) => gdRenderPickCard(g, true)),
+  ];
+  grid.innerHTML = cards.join("");
+  gdUpdateSummary();
+}
+
+function gdRenderPickCard(p, isGuest) {
+  const id = isGuest ? p.id : String(p.id);
+  const selected = gdSelected.has(id);
+  const tier = isGuest ? "temp" : cardTier(p.overall);
+
+  let body;
+  if (isGuest) {
+    body = `
+      <div class="fut-card-body">
+        <div class="fut-card-meta">
+          <div class="fut-rating">GUEST</div>
+          <div class="fut-position">BBL</div>
+        </div>
+        <div class="fut-photo">
+          <span class="fut-photo-initials">${getInitials(p.name)}</span>
+        </div>
+      </div>
+      <div class="fut-card-divider"></div>
+      <div class="fut-card-stats">
+        <div class="fut-stat-row">
+          <div class="fut-stat"><span class="fut-stat-val">--</span><span class="fut-stat-label">PLC</span></div>
+          <div class="fut-stat"><span class="fut-stat-val">--</span><span class="fut-stat-label">WBL</span></div>
+        </div>
+        <div class="fut-stat-row">
+          <div class="fut-stat"><span class="fut-stat-val">--</span><span class="fut-stat-label">BWL</span></div>
+          <div class="fut-stat"><span class="fut-stat-val">--</span><span class="fut-stat-label">SUB</span></div>
+        </div>
+        <div class="fut-stat-row">
+          <div class="fut-stat"><span class="fut-stat-val">--</span><span class="fut-stat-label">TLT</span></div>
+          <div class="fut-stat"><span class="fut-stat-val">--</span><span class="fut-stat-label">FLR</span></div>
+        </div>
+      </div>`;
+  } else {
+    const hasPhoto = p.photo_url && p.photo_url.length > 0;
+    const photoHtml = hasPhoto
+      ? `<img src="${p.photo_url}" alt="${p.name}">`
+      : `<span class="fut-photo-initials">${getInitials(p.name)}</span>`;
+    const statRows = [
+      ["placement", "wall_ball"],
+      ["bowling", "substance_use"],
+      ["tilt_aversion", "flair"],
+    ];
+    const statsHtml = statRows
+      .map(
+        ([l, r]) => `
+        <div class="fut-stat-row">
+          <div class="fut-stat"><span class="fut-stat-val">${p[l]}</span><span class="fut-stat-label">${STAT_NAMES[l]}</span></div>
+          <div class="fut-stat"><span class="fut-stat-val">${p[r]}</span><span class="fut-stat-label">${STAT_NAMES[r]}</span></div>
+        </div>`
+      )
+      .join("");
+    body = `
+      <div class="fut-card-body">
+        <div class="fut-card-meta">
+          <div class="fut-rating">${p.overall}</div>
+          <div class="fut-position">BBL</div>
+        </div>
+        <div class="fut-photo">${photoHtml}</div>
+      </div>
+      <div class="fut-card-divider"></div>
+      <div class="fut-card-stats">${statsHtml}</div>`;
+  }
+
+  const removeBtn = isGuest
+    ? `<div class="gd-guest-remove" onclick="event.stopPropagation(); gdRemoveGuest('${id}')" title="Remove guest">&times;</div>`
+    : "";
+
+  return `
+    <div class="gd-pick-card fut-card tier-${tier} ${selected ? "selected" : ""}"
+         onclick="gdToggleSelect('${id}')" data-gd-id="${id}">
+      <div class="gd-pick-check">&#10003;</div>
+      ${removeBtn}
+      <div class="fut-card-inner">
+        <div class="fut-card-face">
+          <div class="fut-card-name">${escapeHtml(p.name)}</div>
+          ${body}
+        </div>
+      </div>
+    </div>`;
+}
+
+function gdToggleSelect(id) {
+  if (gdSelected.has(id)) {
+    gdSelected.delete(id);
+  } else {
+    gdSelected.add(id);
+  }
+  const el = document.querySelector(`.gd-pick-card[data-gd-id="${id}"]`);
+  if (el) el.classList.toggle("selected", gdSelected.has(id));
+  gdUpdateSummary(true);
+}
+
+function gdSelectAll() {
+  players.forEach((p) => gdSelected.add(String(p.id)));
+  gdGuests.forEach((g) => gdSelected.add(g.id));
+  document.querySelectorAll(".gd-pick-card").forEach((el) => el.classList.add("selected"));
+  gdUpdateSummary(true);
+}
+
+function gdClearAll() {
+  gdSelected.clear();
+  document.querySelectorAll(".gd-pick-card").forEach((el) => el.classList.remove("selected"));
+  gdUpdateSummary(true);
+}
+
+function gdAddGuest() {
+  const input = document.getElementById("gd-guest-name");
+  const name = input.value.trim();
+  if (!name) return;
+
+  gdGuestCounter += 1;
+  const id = `g_${gdGuestCounter}_${Date.now()}`;
+  gdGuests.push({ id, name });
+  gdSelected.add(id);
+  input.value = "";
+  gdRenderPickStage();
+  input.focus();
+}
+
+function gdRemoveGuest(id) {
+  gdGuests = gdGuests.filter((g) => g.id !== id);
+  gdSelected.delete(id);
+  gdRenderPickStage();
+}
+
+function gdUpdateSummary(bump) {
+  const n = gdSelected.size;
+  const countEl = document.getElementById("gd-selected-count");
+  countEl.textContent = n;
+  if (bump) {
+    countEl.classList.add("bump");
+    setTimeout(() => countEl.classList.remove("bump"), 220);
+  }
+
+  const formatEl = document.getElementById("gd-format");
+  const btn = document.getElementById("gd-pick-btn");
+  const split = gdGetTeamSplit(n);
+
+  if (n < 2) {
+    formatEl.textContent = "Pick at least 2 players";
+    formatEl.classList.remove("invalid");
+    btn.disabled = true;
+  } else if (n === 7) {
+    formatEl.textContent = "7 PLAYERS — DOESN'T SPLIT WELL. ADD OR DROP ONE.";
+    formatEl.classList.add("invalid");
+    btn.disabled = true;
+  } else if (!split) {
+    formatEl.textContent = "Invalid count";
+    formatEl.classList.add("invalid");
+    btn.disabled = true;
+  } else {
+    formatEl.textContent = `${n} PLAYERS  →  ${gdFormatString(split)}`;
+    formatEl.classList.remove("invalid");
+    btn.disabled = false;
+  }
+}
+
+// --- Team generation ---
+
+function gdShuffle(arr) {
+  const a = arr.slice();
+  for (let i = a.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [a[i], a[j]] = [a[j], a[i]];
+  }
+  return a;
+}
+
+function gdBuildSelectedPool() {
+  const pool = [];
+  gdSelected.forEach((id) => {
+    if (id.startsWith("g_")) {
+      const guest = gdGuests.find((g) => g.id === id);
+      if (guest) pool.push({ ...guest, isGuest: true });
+    } else {
+      const p = players.find((pl) => String(pl.id) === id);
+      if (p) pool.push({ ...p, isGuest: false });
+    }
+  });
+  return pool;
+}
+
+function gdGenerateTeams() {
+  const pool = gdShuffle(gdBuildSelectedPool());
+  const split = gdGetTeamSplit(pool.length);
+  if (!split) return null;
+
+  const teams = [];
+  let cursor = 0;
+  for (let i = 0; i < split.length; i++) {
+    const size = split[i];
+    teams.push({
+      ...GD_TEAMS[i % GD_TEAMS.length],
+      index: i,
+      players: pool.slice(cursor, cursor + size),
+    });
+    cursor += size;
+  }
+  return teams;
+}
+
+// --- Reveal sequence ---
+
+const wait = (ms) => new Promise((res) => setTimeout(res, ms));
+
+async function gdStartReveal() {
+  const teams = gdGenerateTeams();
+  if (!teams) return;
+
+  document.getElementById("gd-stage-pick").classList.remove("active");
+  document.getElementById("gd-stage-reveal").classList.add("active");
+
+  const content = document.getElementById("gd-reveal-content");
+  content.innerHTML = `<div class="gd-picking-text">PICKING TEAMS...</div>`;
+  document.getElementById("gd-reveal-actions").classList.remove("visible");
+  document.getElementById("gd-reveal-actions").innerHTML = "";
+
+  await wait(1400);
+
+  content.innerHTML = "";
+
+  for (let i = 0; i < teams.length; i++) {
+    await gdRevealTeam(teams[i], content);
+  }
+
+  await wait(450);
+  gdShowFinalActions();
+}
+
+async function gdRevealTeam(team, container) {
+  const teamEl = document.createElement("div");
+  teamEl.className = `gd-team gd-team-${team.index}`;
+  teamEl.innerHTML = `
+    <div class="gd-team-banner">
+      <span class="gd-team-tag">${team.tag}</span>
+      <span class="gd-team-name">${team.name}</span>
+    </div>
+    <div class="gd-team-cards" id="gd-team-cards-${team.index}"></div>`;
+  container.appendChild(teamEl);
+
+  gdFireFlash(team.index);
+  await wait(20);
+  teamEl.classList.add("entering");
+  gdShakeStage();
+
+  await wait(700);
+
+  const cardsEl = document.getElementById(`gd-team-cards-${team.index}`);
+  const directions = ["from-left", "from-right", "from-top"];
+  for (let i = 0; i < team.players.length; i++) {
+    const dir = directions[i % directions.length];
+    const cardHtml = gdRenderRevealCard(team.players[i], dir);
+    cardsEl.insertAdjacentHTML("beforeend", cardHtml);
+    await wait(550);
+  }
+
+  await wait(550);
+  // smooth scroll so the team is visible if there are many
+  teamEl.scrollIntoView({ behavior: "smooth", block: "nearest" });
+}
+
+function gdRenderRevealCard(p, dir) {
+  if (p.isGuest) {
+    return `
+      <div class="gd-card-slot ${dir} fut-card tier-temp">
+        <div class="fut-card-inner">
+          <div class="fut-card-face">
+            <div class="fut-card-name">${escapeHtml(p.name)}</div>
+            <div class="fut-card-body">
+              <div class="fut-card-meta">
+                <div class="fut-rating">GUEST</div>
+                <div class="fut-position">BBL</div>
+              </div>
+              <div class="fut-photo">
+                <span class="fut-photo-initials">${getInitials(p.name)}</span>
+              </div>
+            </div>
+            <div class="fut-card-divider"></div>
+            <div class="fut-card-stats">
+              <div class="fut-stat-row">
+                <div class="fut-stat"><span class="fut-stat-val">--</span><span class="fut-stat-label">PLC</span></div>
+                <div class="fut-stat"><span class="fut-stat-val">--</span><span class="fut-stat-label">WBL</span></div>
+              </div>
+              <div class="fut-stat-row">
+                <div class="fut-stat"><span class="fut-stat-val">--</span><span class="fut-stat-label">BWL</span></div>
+                <div class="fut-stat"><span class="fut-stat-val">--</span><span class="fut-stat-label">SUB</span></div>
+              </div>
+              <div class="fut-stat-row">
+                <div class="fut-stat"><span class="fut-stat-val">--</span><span class="fut-stat-label">TLT</span></div>
+                <div class="fut-stat"><span class="fut-stat-val">--</span><span class="fut-stat-label">FLR</span></div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>`;
+  }
+
+  const tier = cardTier(p.overall);
+  const hasPhoto = p.photo_url && p.photo_url.length > 0;
+  const photoHtml = hasPhoto
+    ? `<img src="${p.photo_url}" alt="${p.name}">`
+    : `<span class="fut-photo-initials">${getInitials(p.name)}</span>`;
+
+  const statRows = [
+    ["placement", "wall_ball"],
+    ["bowling", "substance_use"],
+    ["tilt_aversion", "flair"],
+  ];
+  const statsHtml = statRows
+    .map(
+      ([l, r]) => `
+      <div class="fut-stat-row">
+        <div class="fut-stat"><span class="fut-stat-val">${p[l]}</span><span class="fut-stat-label">${STAT_NAMES[l]}</span></div>
+        <div class="fut-stat"><span class="fut-stat-val">${p[r]}</span><span class="fut-stat-label">${STAT_NAMES[r]}</span></div>
+      </div>`
+    )
+    .join("");
+
+  return `
+    <div class="gd-card-slot ${dir} fut-card tier-${tier}">
+      <div class="fut-card-inner">
+        <div class="fut-card-face">
+          <div class="fut-card-name">${escapeHtml(p.name)}</div>
+          <div class="fut-card-body">
+            <div class="fut-card-meta">
+              <div class="fut-rating">${p.overall}</div>
+              <div class="fut-position">BBL</div>
+            </div>
+            <div class="fut-photo">${photoHtml}</div>
+          </div>
+          <div class="fut-card-divider"></div>
+          <div class="fut-card-stats">${statsHtml}</div>
+        </div>
+      </div>
+    </div>`;
+}
+
+function gdFireFlash(teamIndex) {
+  const flash = document.createElement("div");
+  flash.className = `gd-flash team-${teamIndex} fire`;
+  document.body.appendChild(flash);
+  setTimeout(() => flash.remove(), 600);
+}
+
+function gdShakeStage() {
+  const stage = document.getElementById("gd-stage-reveal");
+  stage.classList.remove("gd-shake");
+  void stage.offsetWidth;
+  stage.classList.add("gd-shake");
+  setTimeout(() => stage.classList.remove("gd-shake"), 450);
+}
+
+function gdShowFinalActions() {
+  const actions = document.getElementById("gd-reveal-actions");
+  actions.innerHTML = `
+    <button class="gd-lets-go" onclick="closeGameDayPicker()">LET'S GO!</button>
+    <button class="gd-pick-again" onclick="gdBackToPick()">Pick Again</button>`;
+  actions.classList.add("visible");
+}
+
+function gdBackToPick() {
+  document.getElementById("gd-stage-reveal").classList.remove("active");
+  document.getElementById("gd-stage-pick").classList.add("active");
+  document.getElementById("gd-reveal-actions").classList.remove("visible");
+  // keep selected players & guests; user can tweak then re-pick
+  window.scrollTo({ top: 0, behavior: "smooth" });
+}

@@ -28,6 +28,10 @@
         <p class="hero-description">
           It all about placement until its not and then its about bowling.
         </p>
+        <button class="btn-game-day" onclick="openGameDayPicker()">
+          <span class="gd-cta-label">GAME DAY</span>
+          <span class="gd-cta-sub">Pick Teams</span>
+        </button>
       </div>
     </section>
 
@@ -159,6 +163,53 @@
 
   <!-- Card Zoom Overlay -->
   <div id="card-zoom-overlay" class="card-zoom-overlay" onclick="closeCardZoom()"></div>
+
+  <!-- Game Day Team Picker Overlay -->
+  <div id="game-day-overlay" class="gd-overlay">
+    <button class="gd-close" onclick="closeGameDayPicker()" aria-label="Close">&times;</button>
+
+    <!-- STAGE 1: PICK PLAYERS -->
+    <div id="gd-stage-pick" class="gd-stage gd-stage-pick">
+      <div class="gd-pick-header">
+        <h2 class="gd-title">GAME DAY</h2>
+        <p class="gd-subtitle">Tap to pick. Add guests if needed. Let fate sort the rest.</p>
+      </div>
+
+      <div class="gd-pick-actions">
+        <button class="gd-mini-btn" onclick="gdSelectAll()">Select All</button>
+        <button class="gd-mini-btn" onclick="gdClearAll()">Clear</button>
+      </div>
+
+      <div id="gd-player-grid" class="gd-player-grid"></div>
+
+      <div class="gd-guest-section">
+        <div class="gd-guest-row">
+          <input id="gd-guest-name" type="text" placeholder="Guest name..."
+                 onkeypress="if(event.key==='Enter'){event.preventDefault();gdAddGuest();}">
+          <button class="gd-guest-add" onclick="gdAddGuest()">+ ADD GUEST</button>
+        </div>
+      </div>
+
+      <div class="gd-summary-bar">
+        <div class="gd-count-block">
+          <span id="gd-selected-count" class="gd-count-num">0</span>
+          <span class="gd-count-label">PLAYERS</span>
+        </div>
+        <div id="gd-format" class="gd-format">Pick at least 2 players</div>
+        <button id="gd-pick-btn" class="gd-pick-btn" onclick="gdStartReveal()" disabled>
+          PICK TEAMS
+        </button>
+      </div>
+    </div>
+
+    <!-- STAGE 2: REVEAL -->
+    <div id="gd-stage-reveal" class="gd-stage gd-stage-reveal">
+      <div class="gd-reveal-bg"></div>
+      <div class="gd-reveal-spotlights"></div>
+      <div id="gd-reveal-content" class="gd-reveal-content"></div>
+      <div id="gd-reveal-actions" class="gd-reveal-actions"></div>
+    </div>
+  </div>
 
   <!-- Hidden file input for photo uploads -->
   <input type="file" id="photo-upload-input" accept="image/*" style="display:none" onchange="handlePhotoUpload(event)">
