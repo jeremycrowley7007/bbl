@@ -1,0 +1,36 @@
+#!/usr/bin/env bash
+# Run this ON PythonAnywhere (Bash console or after ssh in):
+#   cd ~/bbl && ./deploy
+#
+# Optional overrides in .deploy.env (same directory):
+#   PA_WSGI=/var/www/yourusername_pythonanywhere_com_wsgi.py
+#   GIT_BRANCH=main
+
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "$0")" && pwd)"
+cd "$ROOT"
+
+if [[ -f "$ROOT/.deploy.env" ]]; then
+  # shellcheck source=/dev/null
+  source "$ROOT/.deploy.env"
+fi
+
+GIT_BRANCH="${GIT_BRANCH:-main}"
+PA_WSGI="${PA_WSGI:-/var/www/${USER}_pythonanywhere_com_wsgi.py}"
+
+echo "==> Pulling ${GIT_BRANCH}..."
+git pull origin "$GIT_BRANCH"
+
+echo "==> Installing dependencies..."
+pip install -r requirements.txt --user
+
+echo "==> Reloading web app..."
+if [[ ! -f "$PA_WSGI" ]]; then
+  echo "Error: WSGI file not found at: $PA_WSGI"
+  echo "Set PA_WSGI in .deploy.env (see .deploy.env.example)."
+  exit 1
+fi
+touch "$PA_WSGI"
+
+echo "==> Deploy complete."

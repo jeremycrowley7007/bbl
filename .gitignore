@@ -2,5 +2,6 @@ bocce.db
 bocce.db-shm
 bocce.db-wal
 photos/
+.deploy.env
 __pycache__/
 *.pyc

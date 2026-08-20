@@ -478,8 +478,8 @@ main {
   margin-bottom: 3rem;
 }
 
-.league-panel-hidden {
-  display: none;
+#league-section .league-panel-hidden {
+  display: none !important;
 }
 
 .league-header {
