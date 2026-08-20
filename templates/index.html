@@ -32,6 +32,11 @@
           <span class="gd-cta-label">GAME DAY</span>
           <span class="gd-cta-sub">Pick Teams</span>
         </button>
+        <div class="hero-secondary">
+          <button class="btn-log-result" onclick="openLogGameModal()">
+            <span class="lg-cta-icon">&#9971;</span> LOG GAME RESULT
+          </button>
+        </div>
       </div>
     </section>
 
@@ -48,24 +53,31 @@
       <div id="player-cards" class="player-grid"></div>
     </section>
 
-    <section id="requests-section">
-      <div class="requests-header">
-        <div class="tabs">
-          <button class="tab active" data-tab="open" onclick="switchTab('open')">
+    <section id="league-section">
+      <h2 class="section-title">THE LEAGUE</h2>
+      <div class="league-header">
+        <div class="league-actions">
+          <button type="button" class="btn btn-primary btn-compact" onclick="leagueLogResult()">+ Log Result</button>
+          <button type="button" class="btn btn-secondary btn-compact" onclick="leagueNewPlayer()">+ Player</button>
+          <button type="button" class="btn btn-secondary btn-compact" onclick="leagueStatChange()">+ Stat Change</button>
+        </div>
+        <nav class="league-nav" aria-label="League views">
+          <button type="button" class="league-tab active" data-tab="standings" onclick="switchTab('standings')">
+            Player Standings
+          </button>
+          <button type="button" class="league-tab" data-tab="log" onclick="switchTab('log')">
+            Game Log <span id="games-count" class="badge">0</span>
+          </button>
+          <button type="button" class="league-tab" data-tab="open" onclick="switchTab('open')">
             Open Requests <span id="open-count" class="badge">0</span>
           </button>
-          <button class="tab" data-tab="closed" onclick="switchTab('closed')">
+          <button type="button" class="league-tab" data-tab="closed" onclick="switchTab('closed')">
             Past Requests <span id="closed-count" class="badge">0</span>
           </button>
-        </div>
-        <div class="request-cta">
-          <button class="btn btn-secondary" onclick="openNewPlayerModal()">+ New Player</button>
-          <button class="btn btn-primary" onclick="openNewRequestModal()">+ Stat Change</button>
-        </div>
+        </nav>
       </div>
-      <p class="requests-explainer">Think a player's stats are wrong? Submit a request with your evidence and let the
-        league weigh in.</p>
-      <div id="requests-list" class="requests-container"></div>
+      <div id="games-body"></div>
+      <div id="requests-list" class="requests-container league-panel-hidden"></div>
     </section>
   </main>
 
@@ -119,23 +131,58 @@
           <label>Why should they join?</label>
           <textarea id="np-description" required placeholder="Make the case. What's their story?"></textarea>
         </div>
-        <h4 class="proposed-title">Starting Stats <span class="hint">(your best guess)</span></h4>
-        <div class="stat-inputs">
-          <div class="stat-input-group"><label>Placement</label><input type="number" id="np-placement" min="1" max="99"
-              value="62"></div>
-          <div class="stat-input-group"><label>Bowling</label><input type="number" id="np-bowling" min="1" max="99"
-              value="62"></div>
-          <div class="stat-input-group"><label>Tilt Aversion</label><input type="number" id="np-tilt_aversion" min="1"
-              max="99" value="62"></div>
-          <div class="stat-input-group"><label>Wall Ball</label><input type="number" id="np-wall_ball" min="1" max="99"
-              value="62"></div>
-          <div class="stat-input-group"><label>Substance Use</label><input type="number" id="np-substance_use" min="1"
-              max="99" value="62"></div>
-          <div class="stat-input-group"><label>Flair</label><input type="number" id="np-flair" min="1" max="99"
-              value="62"></div>
-        </div>
+        <p class="np-baseline-note">All new players start at <strong>62</strong> across the board. Stats earn their way up.</p>
         <button type="submit" class="btn btn-primary btn-full">Submit Request</button>
       </form>
+    </div>
+  </div>
+
+  <!-- Log Game Result Modal -->
+  <div id="log-game-modal" class="modal" onclick="closeModal(event)">
+    <div class="modal-content modal-wide">
+      <div class="modal-header">
+        <h3 id="lg-title">Log Game Result</h3>
+        <button class="modal-close" onclick="closeLogGameModal()">&times;</button>
+      </div>
+
+      <div class="lg-teams-row">
+        <div class="lg-team-card team-0" id="lg-tab-0" onclick="lgSelectTeam(0)">
+          <div class="lg-team-card-top">
+            <span class="lg-team-name">TEAM 1</span>
+            <span class="lg-team-count" id="lg-count-0">0 / 4</span>
+          </div>
+          <input type="number" class="lg-team-score" id="lg-score-0" min="0" placeholder="0" inputmode="numeric"
+            onclick="event.stopPropagation(); lgSelectTeam(0)" oninput="lgScoreInput(0)">
+        </div>
+        <div class="lg-vs-pill">VS</div>
+        <div class="lg-team-card team-1" id="lg-tab-1" onclick="lgSelectTeam(1)">
+          <div class="lg-team-card-top">
+            <span class="lg-team-name">TEAM 2</span>
+            <span class="lg-team-count" id="lg-count-1">0 / 4</span>
+          </div>
+          <input type="number" class="lg-team-score" id="lg-score-1" min="0" placeholder="0" inputmode="numeric"
+            onclick="event.stopPropagation(); lgSelectTeam(1)" oninput="lgScoreInput(1)">
+        </div>
+      </div>
+
+      <p class="lg-hint">Tap to assign to <span id="lg-active-label">Team 1</span> — tap again to remove, or tap someone on the other team to switch.</p>
+      <div id="lg-roster" class="lg-roster"></div>
+
+      <div class="lg-guest-row">
+        <input type="text" id="lg-guest-name" placeholder="Guest name..."
+          onkeypress="if(event.key==='Enter'){event.preventDefault();lgAddGuest();}">
+        <button type="button" class="btn btn-secondary" onclick="lgAddGuest()">+ ADD GUEST</button>
+      </div>
+
+      <div class="form-group lg-notes-group">
+        <label>Notes <span class="lg-optional">optional</span></label>
+        <input type="text" id="lg-notes" placeholder="Comeback of the century, wind was a factor, etc.">
+      </div>
+
+      <div id="lg-status" class="lg-status"></div>
+      <button type="button" id="lg-save-btn" class="btn btn-primary btn-full" onclick="submitGameResult()" disabled>
+        SAVE RESULT
+      </button>
     </div>
   </div>
 
