@@ -915,6 +915,9 @@ main {
 
 /* Legacy — keep for tag styling */
 .request-player-tag {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.45rem;
   font-family: 'Oswald', sans-serif;
   font-weight: 600;
   font-size: 0.8rem;
@@ -925,6 +928,68 @@ main {
   padding: 0.2rem 0.6rem;
   border-radius: 4px;
 }
+
+.rc-overall-delta {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.1rem;
+  font-family: 'Oswald', sans-serif;
+  font-size: 0.72rem;
+  font-weight: 500;
+  letter-spacing: 0;
+  text-transform: none;
+  color: var(--text-dim);
+  padding-left: 0.45rem;
+  border-left: 1px solid rgba(200, 148, 42, 0.35);
+}
+
+.rc-overall-delta .ovr-old {
+  opacity: 0.75;
+}
+
+.rc-overall-delta .ovr-new {
+  font-weight: 700;
+}
+
+.rc-overall-delta.up .ovr-new { color: var(--green); }
+.rc-overall-delta.down .ovr-new { color: var(--red); }
+
+.detail-overall-strip {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.55rem 0.75rem;
+  margin-bottom: 0.75rem;
+  border-radius: var(--radius-sm);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  font-size: 0.85rem;
+}
+
+.detail-overall-strip-label {
+  font-family: 'Oswald', sans-serif;
+  font-weight: 600;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  color: var(--text-dim);
+  font-size: 0.75rem;
+}
+
+.detail-overall-strip-values {
+  font-family: 'Oswald', sans-serif;
+  font-weight: 500;
+  color: var(--text-dim);
+}
+
+.detail-overall-strip-values .ovr-new {
+  font-weight: 700;
+  font-size: 1rem;
+  color: var(--text);
+}
+
+.detail-overall-strip.up .ovr-new { color: var(--green); }
+.detail-overall-strip.down .ovr-new { color: var(--red); }
 
 .request-meta { font-size: 0.75rem; color: var(--text-dim); }
 
@@ -953,22 +1018,6 @@ main {
 
 .stat-change-pill.up { background: rgba(42, 157, 110, 0.1); color: var(--green); }
 .stat-change-pill.down { background: rgba(212, 74, 74, 0.1); color: var(--red); }
-
-.stat-change-pill.overall-pill {
-  background: rgba(200, 148, 42, 0.14);
-  color: var(--accent-dark);
-  font-weight: 700;
-}
-
-.stat-change-pill.overall-pill.up {
-  background: rgba(42, 157, 110, 0.16);
-  color: var(--green);
-}
-
-.stat-change-pill.overall-pill.down {
-  background: rgba(212, 74, 74, 0.14);
-  color: var(--red);
-}
 
 
 .status-badge {

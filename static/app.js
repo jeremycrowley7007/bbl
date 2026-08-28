@@ -56,24 +56,36 @@ function computeOverallFromValues(values) {
   return Math.round(values.reduce((sum, val) => sum + val, 0) / values.length);
 }
 
-function computeOverallFromRequest(r, prefix) {
-  const values = STAT_KEYS.map((key) => r[`${prefix}_${key}`]);
-  if (values.some((v) => v == null)) return null;
+function getMergedStatValues(r, player, prefix) {
+  if (!player) return null;
+  return STAT_KEYS.map((key) => {
+    const fromRequest = r[`${prefix}_${key}`];
+    return fromRequest != null ? fromRequest : player[key];
+  });
+}
+
+function computeMergedOverall(r, player, prefix) {
+  const values = getMergedStatValues(r, player, prefix);
+  if (!values) return null;
   return computeOverallFromValues(values);
 }
 
 function getRequestOverallChange(r, player) {
   if (!player || r.request_type === "new_player") return null;
 
-  const proposedOverall = computeOverallFromRequest(r, "proposed");
+  const hasProposedChange = STAT_KEYS.some((key) => r[`proposed_${key}`] != null);
+  if (!hasProposedChange) return null;
+
+  const proposedOverall = computeMergedOverall(r, player, "proposed");
   if (proposedOverall == null) return null;
 
   const isApproved = r.status === "approved";
   if (isApproved) {
-    const beforeOverall = computeOverallFromRequest(r, "before");
-    if (beforeOverall == null) {
+    const hasBefore = STAT_KEYS.some((key) => r[`before_${key}`] != null);
+    if (!hasBefore) {
       return { baseline: null, proposed: proposedOverall, diff: null, legacy: true };
     }
+    const beforeOverall = computeMergedOverall(r, player, "before");
     return {
       baseline: beforeOverall,
       proposed: proposedOverall,
@@ -90,18 +102,18 @@ function getRequestOverallChange(r, player) {
   };
 }
 
-function renderOverallChangePill(r, player) {
+function renderOverallInTag(r, player) {
   const change = getRequestOverallChange(r, player);
   if (!change) return "";
 
   if (change.legacy) {
-    return `<span class="stat-change-pill overall-pill">Overall: ${change.proposed}</span>`;
+    return `<span class="rc-overall-delta legacy">→ <span class="ovr-new">${change.proposed}</span></span>`;
   }
+
   if (change.diff === 0) return "";
 
   const cls = change.diff > 0 ? "up" : "down";
-  const sign = change.diff > 0 ? "+" : "";
-  return `<span class="stat-change-pill overall-pill ${cls}">Overall ${sign}${change.diff}</span>`;
+  return `<span class="rc-overall-delta ${cls}"><span class="ovr-old">${change.baseline}</span>→<span class="ovr-new">${change.proposed}</span></span>`;
 }
 
 function renderOverallCompareRow(r, player) {
@@ -110,21 +122,17 @@ function renderOverallCompareRow(r, player) {
 
   if (change.legacy) {
     return `
-    <div class="stat-compare-row overall-compare-row">
-      <span class="stat-compare-label">Overall</span>
-      <span class="stat-compare-current">—</span>
-      <span class="stat-compare-arrow">→</span>
-      <span class="stat-compare-proposed">${change.proposed}</span>
+    <div class="detail-overall-strip legacy">
+      <span class="detail-overall-strip-label">Overall</span>
+      <span class="detail-overall-strip-values">→ <span class="ovr-new">${change.proposed}</span></span>
     </div>`;
   }
 
   const cls = change.diff > 0 ? "up" : change.diff < 0 ? "down" : "same";
   return `
-    <div class="stat-compare-row overall-compare-row">
-      <span class="stat-compare-label">Overall</span>
-      <span class="stat-compare-current">${change.baseline}</span>
-      <span class="stat-compare-arrow">→</span>
-      <span class="stat-compare-proposed ${cls}">${change.proposed}</span>
+    <div class="detail-overall-strip ${cls}">
+      <span class="detail-overall-strip-label">Overall</span>
+      <span class="detail-overall-strip-values"><span class="ovr-old">${change.baseline}</span> → <span class="ovr-new">${change.proposed}</span></span>
     </div>`;
 }
 
@@ -320,10 +328,11 @@ function renderRequestCard(r) {
   const isNewPlayer = r.request_type === "new_player";
   const player = players.find((p) => p.id === r.player_id);
   let statPills = "";
+  let overallInTag = "";
 
   if (!isNewPlayer && player) {
     const isApproved = r.status === "approved";
-    const overallPill = renderOverallChangePill(r, player);
+    overallInTag = renderOverallInTag(r, player);
     statPills = Object.keys(STAT_NAMES)
       .map((key) => {
         const proposed = r[`proposed_${key}`];
@@ -349,7 +358,6 @@ function renderRequestCard(r) {
         return `<span class="stat-change-pill ${cls}">${STAT_FULL[key]} ${sign}${diff}</span>`;
       })
       .join("");
-    statPills = overallPill + statPills;
   }
 
   const tagLabel = isNewPlayer ? "NEW PLAYER" : r.player_name;
@@ -419,7 +427,7 @@ function renderRequestCard(r) {
     </div>
     <div class="rc-body">
       <div class="rc-header">
-        <span class="${tagClass}">${tagLabel}${isNewPlayer ? ": " + escapeHtml(r.proposed_name || r.player_name) : ""}</span>
+        <span class="${tagClass}">${tagLabel}${isNewPlayer ? ": " + escapeHtml(r.proposed_name || r.player_name) : ""}${overallInTag}</span>
         <span class="rc-meta">by ${escapeHtml(r.requested_by)} · ${timeAgo(r.created_at)}</span>
         <span class="status-badge ${cardStatus}" style="margin-left:auto">${cardLabel}</span>
       </div>
