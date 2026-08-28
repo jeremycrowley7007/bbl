@@ -56,11 +56,31 @@ function computeOverallFromValues(values) {
   return Math.round(values.reduce((sum, val) => sum + val, 0) / values.length);
 }
 
+function isClosedRequest(r) {
+  return r.status !== "open";
+}
+
+function getStatBaseline(r, player, key) {
+  if (!player) return null;
+  if (isClosedRequest(r) && r[`before_${key}`] != null) {
+    return r[`before_${key}`];
+  }
+  return player[key];
+}
+
 function getMergedStatValues(r, player, prefix) {
   if (!player) return null;
+  const closed = isClosedRequest(r);
   return STAT_KEYS.map((key) => {
     const fromRequest = r[`${prefix}_${key}`];
-    return fromRequest != null ? fromRequest : player[key];
+    if (fromRequest != null) return fromRequest;
+    if (prefix === "proposed" && closed) {
+      return r[`before_${key}`] ?? player[key];
+    }
+    if (prefix === "before") {
+      return r[`before_${key}`] ?? player[key];
+    }
+    return player[key];
   });
 }
 
@@ -79,8 +99,7 @@ function getRequestOverallChange(r, player) {
   const proposedOverall = computeMergedOverall(r, player, "proposed");
   if (proposedOverall == null) return null;
 
-  const isApproved = r.status === "approved";
-  if (isApproved) {
+  if (isClosedRequest(r)) {
     const hasBefore = STAT_KEYS.some((key) => r[`before_${key}`] != null);
     if (!hasBefore) {
       return { baseline: null, proposed: proposedOverall, diff: null, legacy: true };
@@ -331,26 +350,15 @@ function renderRequestCard(r) {
   let overallInTag = "";
 
   if (!isNewPlayer && player) {
-    const isApproved = r.status === "approved";
     overallInTag = renderOverallInTag(r, player);
     statPills = Object.keys(STAT_NAMES)
       .map((key) => {
         const proposed = r[`proposed_${key}`];
         if (proposed == null) return "";
-        // For approved requests, the player row was already updated, so
-        // current === proposed and a normal diff would always be zero.
-        // Use the snapshot captured at approval time as the baseline instead.
-        let baseline;
-        if (isApproved) {
-          if (r[`before_${key}`] == null) {
-            // Legacy approved request with no snapshot — show the value
-            // that was applied without a diff, so it's still visible.
-            return `<span class="stat-change-pill">${STAT_FULL[key]}: ${proposed}</span>`;
-          }
-          baseline = r[`before_${key}`];
-        } else {
-          baseline = player[key];
+        if (isClosedRequest(r) && r[`before_${key}`] == null) {
+          return `<span class="stat-change-pill">${STAT_FULL[key]}: ${proposed}</span>`;
         }
+        const baseline = getStatBaseline(r, player, key);
         const diff = proposed - baseline;
         if (diff === 0) return "";
         const cls = diff > 0 ? "up" : "down";
@@ -602,37 +610,26 @@ async function openDetailModal(reqId) {
 
   let statsHtml = "";
   if (player) {
-    const isApproved = r.status === "approved";
     statsHtml = renderOverallCompareRow(r, player) + Object.keys(STAT_NAMES)
       .map((key) => {
         const proposed = r[`proposed_${key}`];
         if (proposed == null) return "";
-        // For approved requests, use the snapshot captured at approval time
-        // so we can still show the original "before" value.
-        let baseline;
-        let baselineLabel;
-        if (isApproved) {
-          if (r[`before_${key}`] == null) {
-            return `
+        if (isClosedRequest(r) && r[`before_${key}`] == null) {
+          return `
             <div class="stat-compare-row">
               <span class="stat-compare-label">${STAT_FULL[key]}</span>
               <span class="stat-compare-current">—</span>
               <span class="stat-compare-arrow">→</span>
               <span class="stat-compare-proposed">${proposed}</span>
             </div>`;
-          }
-          baseline = r[`before_${key}`];
-          baselineLabel = baseline;
-        } else {
-          baseline = player[key];
-          baselineLabel = baseline;
         }
+        const baseline = getStatBaseline(r, player, key);
         const diff = proposed - baseline;
         const cls = diff > 0 ? "up" : diff < 0 ? "down" : "same";
         return `
         <div class="stat-compare-row">
           <span class="stat-compare-label">${STAT_FULL[key]}</span>
-          <span class="stat-compare-current">${baselineLabel}</span>
+          <span class="stat-compare-current">${baseline}</span>
           <span class="stat-compare-arrow">→</span>
           <span class="stat-compare-proposed ${cls}">${proposed}</span>
         </div>`;

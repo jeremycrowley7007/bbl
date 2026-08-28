@@ -230,6 +230,8 @@ def init_db():
     if history_rows == 0:
         _backfill_stat_history(db)
 
+    _backfill_request_snapshots(db)
+
     db.commit()
     db.close()
 
@@ -296,6 +298,48 @@ def _backfill_stat_history(db):
                         a["id"], a["requested_by"], a["closed_at"],
                     ),
                 )
+
+
+def reconstruct_player_stats_at(db, player_id, at_time):
+    """Rebuild a player's stat line as it stood at a given timestamp."""
+    stats = {f: LEAGUE_BASELINE for f in STAT_FIELDS}
+    rows = db.execute(
+        """SELECT stat_field, new_value FROM stat_history
+           WHERE player_id=? AND created_at <= ?
+           ORDER BY created_at ASC, id ASC""",
+        (player_id, at_time),
+    ).fetchall()
+    for row in rows:
+        field = row["stat_field"]
+        if field in stats:
+            stats[field] = row["new_value"]
+    return stats
+
+
+def _backfill_request_snapshots(db):
+    """Fill missing before_* columns from stat_history at request creation time."""
+    requests = db.execute(
+        """SELECT * FROM requests
+           WHERE player_id IS NOT NULL
+           AND (request_type IS NULL OR request_type = 'stat_update')"""
+    ).fetchall()
+
+    for req in requests:
+        missing = [f for f in STAT_FIELDS if req[f"before_{f}"] is None]
+        if not missing or not req["created_at"]:
+            continue
+
+        stats = reconstruct_player_stats_at(db, req["player_id"], req["created_at"])
+        updates = []
+        values = []
+        for field in missing:
+            updates.append(f"before_{field}=?")
+            values.append(stats[field])
+        values.append(req["id"])
+        db.execute(
+            f"UPDATE requests SET {', '.join(updates)} WHERE id=?",
+            values,
+        )
 
 
 init_db()
@@ -915,8 +959,10 @@ def api_create_request():
         """INSERT INTO requests
            (player_id, requested_by, description,
             proposed_placement, proposed_bowling, proposed_tilt_aversion,
-            proposed_wall_ball, proposed_substance_use, proposed_flair)
-           VALUES (?,?,?,?,?,?,?,?,?)""",
+            proposed_wall_ball, proposed_substance_use, proposed_flair,
+            before_placement, before_bowling, before_tilt_aversion,
+            before_wall_ball, before_substance_use, before_flair)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
         (
             data["player_id"],
             data.get("requested_by", "Anonymous"),
@@ -927,6 +973,12 @@ def api_create_request():
             data.get("proposed_wall_ball"),
             data.get("proposed_substance_use"),
             data.get("proposed_flair"),
+            player["placement"],
+            player["bowling"],
+            player["tilt_aversion"],
+            player["wall_ball"],
+            player["substance_use"],
+            player["flair"],
         ),
     )
     db.commit()
