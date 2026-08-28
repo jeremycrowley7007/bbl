@@ -33,7 +33,7 @@ from app import (  # noqa: E402
 )
 
 
-def preview(db: sqlite3.Connection, delete_before: str) -> None:
+def preview(db: sqlite3.Connection, delete_before: str, reset_at: str | None) -> None:
     print("=== STEP 1: undo backfill (clear all before_*) ===")
     count = db.execute(
         """SELECT COUNT(*) FROM requests
@@ -57,7 +57,7 @@ def preview(db: sqlite3.Connection, delete_before: str) -> None:
         print(f"  #{r['id']} {r['status']:<8} {r['created_at']}  {r['name'] or '?'}")
     print(f"  Total to delete: {len(rows)}")
 
-    print("\n=== STEP 3: rerun backfill on remaining requests ===")
+    print("\n=== STEP 3: replay snapshots from reset (not stat_history backfill) ===")
     remaining = db.execute(
         """SELECT COUNT(*) FROM requests
            WHERE player_id IS NOT NULL
@@ -65,7 +65,9 @@ def preview(db: sqlite3.Connection, delete_before: str) -> None:
            AND (request_type IS NULL OR request_type = 'stat_update')""",
         (delete_before,),
     ).fetchone()[0]
-    print(f"  Will backfill snapshots for {remaining} requests")
+    print(f"  Will replay before_* for {remaining} remaining requests")
+    if reset_at:
+        print(f"  Reset anchor: {reset_at}")
 
 
 def run(db: sqlite3.Connection, delete_before: str, reset_at: str | None, baseline: int) -> None:
@@ -75,11 +77,10 @@ def run(db: sqlite3.Connection, delete_before: str, reset_at: str | None, baseli
     deleted = delete_requests_before(db, delete_before)
     print(f"Step 2: deleted {deleted} requests before {delete_before}")
 
+    if not reset_at:
+        raise SystemExit("Step 3 requires --reset-at for replay-based snapshots")
     result = rerun_request_snapshot_backfill(db, reset_at, baseline)
-    print(
-        f"Step 3: reset_added={result['reset_added']}, "
-        f"requests_with_snapshots={result['requests_with_snapshots']}"
-    )
+    print(f"Step 3: {result}")
 
 
 def main() -> None:
@@ -115,7 +116,7 @@ def main() -> None:
     db.row_factory = sqlite3.Row
     db.execute("PRAGMA foreign_keys=ON")
 
-    preview(db, args.delete_before)
+    preview(db, args.delete_before, args.reset_at)
 
     if not args.yes:
         print("\nDry run only. Re-run with --yes to apply.")

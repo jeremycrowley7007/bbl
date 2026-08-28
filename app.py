@@ -236,8 +236,6 @@ def init_db():
     if LEAGUE_RESET_AT:
         ensure_reset_in_history(db, LEAGUE_RESET_AT, LEAGUE_BASELINE)
 
-    _backfill_request_snapshots(db)
-
     db.commit()
     db.close()
 
@@ -265,25 +263,6 @@ def _backfill_stat_history(db):
                    VALUES (?,?,?,?,?,?,?)""",
                 (p["id"], f, None, LEAGUE_BASELINE, "created", "system", p["created_at"]),
             )
-
-            earliest = db.execute(
-                f"SELECT before_{f} AS bv FROM requests "
-                f"WHERE player_id=? AND status='approved' AND before_{f} IS NOT NULL "
-                f"ORDER BY closed_at ASC, id ASC LIMIT 1",
-                (p["id"],),
-            ).fetchone()
-            bridge_target = earliest["bv"] if earliest else p[f]
-
-            if bridge_target != LEAGUE_BASELINE:
-                db.execute(
-                    """INSERT INTO stat_history
-                       (player_id, stat_field, old_value, new_value, source, changed_by, created_at)
-                       VALUES (?,?,?,?,?,?,?)""",
-                    (
-                        p["id"], f, LEAGUE_BASELINE, bridge_target,
-                        "pre_tracking", "system", p["created_at"],
-                    ),
-                )
 
             approvals = db.execute(
                 f"SELECT id, before_{f} AS bv, proposed_{f} AS pv, "
@@ -385,17 +364,7 @@ def ensure_reset_in_history(db, reset_at, baseline=LEAGUE_BASELINE):
 
 def repair_request_snapshots(db, reset_at, baseline=LEAGUE_BASELINE):
     """Fix bad before_* snapshots after a league reset was missing from history."""
-    reset_added = ensure_reset_in_history(db, reset_at, baseline)
-    cleared = db.execute(
-        """SELECT COUNT(*) FROM requests
-           WHERE player_id IS NOT NULL
-           AND created_at >= ?
-           AND (request_type IS NULL OR request_type = 'stat_update')""",
-        (reset_at,),
-    ).fetchone()[0]
-    _clear_request_snapshots_from(db, reset_at)
-    _backfill_request_snapshots(db)
-    return {"reset_added": reset_added, "requests_cleared": cleared}
+    return rerun_request_snapshot_backfill(db, reset_at, baseline)
 
 
 def undo_request_snapshots(db):
@@ -432,19 +401,98 @@ def delete_requests_before(db, cutoff):
     return len(ids)
 
 
-def rerun_request_snapshot_backfill(db, reset_at=None, baseline=LEAGUE_BASELINE):
-    """Ensure reset is in history, then fill missing before_* from stat_history."""
-    reset_added = False
-    if reset_at:
-        reset_added = ensure_reset_in_history(db, reset_at, baseline)
-    _backfill_request_snapshots(db)
-    filled = db.execute(
-        """SELECT COUNT(*) FROM requests
+def replay_request_snapshots(db, reset_at, baseline=LEAGUE_BASELINE):
+    """Rebuild before_* by replaying requests from a league reset forward.
+
+    Assumes every player was at ``baseline`` after ``reset_at``, then walks
+    requests in time order: snapshot stats at creation, apply approved changes
+    at close. This avoids relying on poisoned stat_history backfill rows.
+    """
+    players = {
+        p["id"]: p
+        for p in db.execute("SELECT * FROM players").fetchall()
+    }
+    requests = db.execute(
+        """SELECT * FROM requests
            WHERE player_id IS NOT NULL
            AND (request_type IS NULL OR request_type = 'stat_update')
-           AND before_placement IS NOT NULL"""
-    ).fetchone()[0]
-    return {"reset_added": reset_added, "requests_with_snapshots": filled}
+           ORDER BY created_at ASC, id ASC"""
+    ).fetchall()
+    req_map = {r["id"]: r for r in requests}
+
+    event_rank = {
+        "reset": 0,
+        "player_join": 1,
+        "request_created": 2,
+        "request_approved": 3,
+    }
+    events = [(reset_at, "reset", None, None)]
+    for p in players.values():
+        events.append((p["created_at"], "player_join", None, p["id"]))
+    for r in requests:
+        events.append((r["created_at"], "request_created", r["id"], r["player_id"]))
+        if r["status"] == "approved" and r["closed_at"]:
+            events.append((r["closed_at"], "request_approved", r["id"], r["player_id"]))
+
+    events.sort(key=lambda e: (e[0], event_rank[e[1]], e[2] or 0))
+
+    sim = {}
+    snapshots = {}
+
+    def baseline_stats():
+        return {f: baseline for f in STAT_FIELDS}
+
+    for _ts, kind, req_id, player_id in events:
+        if kind == "reset":
+            for pid, p in players.items():
+                if p["created_at"] <= _ts:
+                    sim[pid] = baseline_stats()
+        elif kind == "player_join":
+            sim[player_id] = baseline_stats()
+        elif kind == "request_created":
+            r = req_map[req_id]
+            pid = r["player_id"]
+            if pid not in sim:
+                sim[pid] = baseline_stats()
+            snapshots[req_id] = dict(sim[pid])
+        elif kind == "request_approved":
+            r = req_map[req_id]
+            pid = r["player_id"]
+            if pid not in sim:
+                sim[pid] = baseline_stats()
+            for f in STAT_FIELDS:
+                proposed = r[f"proposed_{f}"]
+                if proposed is not None:
+                    sim[pid][f] = proposed
+
+    for req_id, stats in snapshots.items():
+        updates = [f"before_{f}=?" for f in STAT_FIELDS]
+        values = [stats[f] for f in STAT_FIELDS] + [req_id]
+        db.execute(
+            f"UPDATE requests SET {', '.join(updates)} WHERE id=?",
+            values,
+        )
+
+    return {"requests_updated": len(snapshots)}
+
+
+def scrub_stat_history_backfill(db):
+    """Remove inferred stat_history rows that corrupt timeline replay."""
+    db.execute("DELETE FROM stat_history WHERE source IN ('pre_tracking', 'created')")
+    return db.execute("SELECT changes()").fetchone()[0]
+
+
+def rerun_request_snapshot_backfill(db, reset_at=None, baseline=LEAGUE_BASELINE):
+    """Clear before_* and rebuild from league-reset replay."""
+    if not reset_at:
+        raise ValueError("reset_at is required for snapshot replay")
+    cleared = undo_request_snapshots(db)
+    scrub_stat_history_backfill(db)
+    reset_added = ensure_reset_in_history(db, reset_at, baseline)
+    result = replay_request_snapshots(db, reset_at, baseline)
+    result["reset_added"] = reset_added
+    result["requests_cleared"] = cleared
+    return result
 
 
 if not os.environ.get("BBL_SKIP_INIT"):
