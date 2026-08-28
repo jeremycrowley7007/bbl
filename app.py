@@ -16,6 +16,9 @@ ALLOWED_EXTENSIONS = {"jpg", "jpeg", "png", "gif", "webp"}
 
 STAT_FIELDS = ["placement", "bowling", "tilt_aversion", "wall_ball", "substance_use", "flair"]
 LEAGUE_BASELINE = 62  # every player notionally joins the league at this value across the board
+LEAGUE_RESET_AT = os.environ.get("LEAGUE_RESET_AT", "").strip() or None
+
+BEFORE_STAT_COLUMNS = [f"before_{f}" for f in STAT_FIELDS]
 
 MAX_TEAMS_PER_GAME = 4
 MAX_PLAYERS_PER_TEAM = 4
@@ -230,6 +233,9 @@ def init_db():
     if history_rows == 0:
         _backfill_stat_history(db)
 
+    if LEAGUE_RESET_AT:
+        ensure_reset_in_history(db, LEAGUE_RESET_AT, LEAGUE_BASELINE)
+
     _backfill_request_snapshots(db)
 
     db.commit()
@@ -342,18 +348,128 @@ def _backfill_request_snapshots(db):
         )
 
 
-init_db()
+def _clear_request_snapshots_from(db, reset_at):
+    """Drop before_* snapshots on requests created at or after a league reset."""
+    nulls = ", ".join(f"{col}=NULL" for col in BEFORE_STAT_COLUMNS)
+    db.execute(
+        f"""UPDATE requests SET {nulls}
+            WHERE player_id IS NOT NULL
+            AND created_at >= ?
+            AND (request_type IS NULL OR request_type = 'stat_update')""",
+        (reset_at,),
+    )
+
+
+def ensure_reset_in_history(db, reset_at, baseline=LEAGUE_BASELINE):
+    """Record a league-wide stat reset in stat_history (idempotent)."""
+    existing = db.execute(
+        "SELECT 1 FROM stat_history WHERE source='reset_all' AND created_at=? LIMIT 1",
+        (reset_at,),
+    ).fetchone()
+    if existing:
+        return False
+
+    players = db.execute("SELECT id FROM players").fetchall()
+    for p in players:
+        stats = reconstruct_player_stats_at(db, p["id"], reset_at)
+        for f in STAT_FIELDS:
+            old = stats[f]
+            if old == baseline:
+                continue
+            record_stat_change(
+                db, p["id"], f, old, baseline,
+                "reset_all", changed_by="admin", created_at=reset_at,
+            )
+    return True
+
+
+def repair_request_snapshots(db, reset_at, baseline=LEAGUE_BASELINE):
+    """Fix bad before_* snapshots after a league reset was missing from history."""
+    reset_added = ensure_reset_in_history(db, reset_at, baseline)
+    cleared = db.execute(
+        """SELECT COUNT(*) FROM requests
+           WHERE player_id IS NOT NULL
+           AND created_at >= ?
+           AND (request_type IS NULL OR request_type = 'stat_update')""",
+        (reset_at,),
+    ).fetchone()[0]
+    _clear_request_snapshots_from(db, reset_at)
+    _backfill_request_snapshots(db)
+    return {"reset_added": reset_added, "requests_cleared": cleared}
+
+
+def undo_request_snapshots(db):
+    """Clear all before_* columns (reverses snapshot backfill)."""
+    nulls = ", ".join(f"{col}=NULL" for col in BEFORE_STAT_COLUMNS)
+    db.execute(
+        f"""UPDATE requests SET {nulls}
+            WHERE player_id IS NOT NULL
+            AND (request_type IS NULL OR request_type = 'stat_update')"""
+    )
+    return db.execute(
+        """SELECT COUNT(*) FROM requests
+           WHERE player_id IS NOT NULL
+           AND (request_type IS NULL OR request_type = 'stat_update')"""
+    ).fetchone()[0]
+
+
+def delete_requests_before(db, cutoff):
+    """Delete requests created before cutoff and their related rows."""
+    ids = [
+        r["id"]
+        for r in db.execute(
+            "SELECT id FROM requests WHERE created_at < ?", (cutoff,)
+        ).fetchall()
+    ]
+    if not ids:
+        return 0
+
+    placeholders = ",".join("?" * len(ids))
+    for table in ("comments", "upvotes", "downvotes"):
+        db.execute(f"DELETE FROM {table} WHERE request_id IN ({placeholders})", ids)
+    db.execute(f"DELETE FROM stat_history WHERE request_id IN ({placeholders})", ids)
+    db.execute(f"DELETE FROM requests WHERE id IN ({placeholders})", ids)
+    return len(ids)
+
+
+def rerun_request_snapshot_backfill(db, reset_at=None, baseline=LEAGUE_BASELINE):
+    """Ensure reset is in history, then fill missing before_* from stat_history."""
+    reset_added = False
+    if reset_at:
+        reset_added = ensure_reset_in_history(db, reset_at, baseline)
+    _backfill_request_snapshots(db)
+    filled = db.execute(
+        """SELECT COUNT(*) FROM requests
+           WHERE player_id IS NOT NULL
+           AND (request_type IS NULL OR request_type = 'stat_update')
+           AND before_placement IS NOT NULL"""
+    ).fetchone()[0]
+    return {"reset_added": reset_added, "requests_with_snapshots": filled}
+
+
+if not os.environ.get("BBL_SKIP_INIT"):
+    init_db()
 
 
 def record_stat_change(db, player_id, stat_field, old_value, new_value,
-                       source, request_id=None, changed_by=None):
+                       source, request_id=None, changed_by=None, created_at=None):
     """Insert one row into stat_history. Caller is responsible for skipping no-ops."""
-    db.execute(
-        """INSERT INTO stat_history
-           (player_id, stat_field, old_value, new_value, source, request_id, changed_by)
-           VALUES (?,?,?,?,?,?,?)""",
-        (player_id, stat_field, old_value, new_value, source, request_id, changed_by),
-    )
+    if created_at:
+        db.execute(
+            """INSERT INTO stat_history
+               (player_id, stat_field, old_value, new_value, source,
+                request_id, changed_by, created_at)
+               VALUES (?,?,?,?,?,?,?,?)""",
+            (player_id, stat_field, old_value, new_value, source,
+             request_id, changed_by, created_at),
+        )
+    else:
+        db.execute(
+            """INSERT INTO stat_history
+               (player_id, stat_field, old_value, new_value, source, request_id, changed_by)
+               VALUES (?,?,?,?,?,?,?)""",
+            (player_id, stat_field, old_value, new_value, source, request_id, changed_by),
+        )
 
 
 def player_to_dict(row):
@@ -564,10 +680,11 @@ def api_reset_stats():
     if data.get("admin_key") != ADMIN_KEY:
         return jsonify({"error": "Unauthorized"}), 403
 
-    baseline = int(data.get("baseline", 70))
+    baseline = int(data.get("baseline", LEAGUE_BASELINE))
     baseline = max(1, min(99, baseline))
 
     db = get_db()
+    reset_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     players_before = db.execute("SELECT * FROM players").fetchall()
     db.execute(
         "UPDATE players SET placement=?, bowling=?, tilt_aversion=?, wall_ball=?, substance_use=?, flair=?",
@@ -578,10 +695,30 @@ def api_reset_stats():
             if p[f] != baseline:
                 record_stat_change(
                     db, p["id"], f, p[f], baseline,
-                    "reset_all", changed_by="admin",
+                    "reset_all", changed_by="admin", created_at=reset_at,
                 )
     db.commit()
-    return jsonify({"success": True, "baseline": baseline})
+    return jsonify({"success": True, "baseline": baseline, "reset_at": reset_at})
+
+
+@app.route("/api/admin/repair-snapshots", methods=["POST"])
+def api_repair_snapshots():
+    """Re-record a past league reset in history and rebuild request before_* snapshots."""
+    data = request.json
+    if data.get("admin_key") != ADMIN_KEY:
+        return jsonify({"error": "Unauthorized"}), 403
+
+    reset_at = (data.get("reset_at") or "").strip()
+    if not reset_at:
+        return jsonify({"error": "reset_at is required (YYYY-MM-DD HH:MM:SS)"}), 400
+
+    baseline = int(data.get("baseline", LEAGUE_BASELINE))
+    baseline = max(1, min(99, baseline))
+
+    db = get_db()
+    result = repair_request_snapshots(db, reset_at, baseline)
+    db.commit()
+    return jsonify({"success": True, "reset_at": reset_at, "baseline": baseline, **result})
 
 
 # ---------------------------------------------------------------------------

@@ -1118,7 +1118,7 @@ function exitAdminMode() {
 // --- Admin Reset All Stats ---
 
 async function resetAllStats() {
-  const input = prompt("Reset ALL players to what baseline? (1–99)", "70");
+  const input = prompt("Reset ALL players to what baseline? (1–99)", "62");
   if (input === null) return;
   const baseline = parseInt(input);
   if (isNaN(baseline) || baseline < 1 || baseline > 99) {
@@ -1138,6 +1138,49 @@ async function resetAllStats() {
     return;
   }
   await loadPlayers();
+}
+
+async function repairSnapshotsAfterReset() {
+  const resetAt = prompt(
+    "When did you reset everyone to 62?\nFormat: YYYY-MM-DD HH:MM:SS\n(e.g. 2026-04-08 12:00:00)",
+    ""
+  );
+  if (resetAt === null || !resetAt.trim()) return;
+
+  const baselineInput = prompt("Baseline everyone was reset to?", "62");
+  if (baselineInput === null) return;
+  const baseline = parseInt(baselineInput);
+  if (isNaN(baseline) || baseline < 1 || baseline > 99) {
+    alert("Enter a number between 1 and 99.");
+    return;
+  }
+
+  if (!confirm(
+    `Rebuild request snapshots using a league reset at ${resetAt.trim()} → ${baseline}?`
+  )) return;
+
+  const res = await fetch("/api/admin/repair-snapshots", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      admin_key: adminKey,
+      reset_at: resetAt.trim(),
+      baseline,
+    }),
+  });
+  const data = await res.json();
+  if (data.error) {
+    alert(data.error);
+    return;
+  }
+  alert(
+    `Repair complete.\nReset recorded: ${data.reset_added ? "yes" : "already on file"}\n` +
+    `Requests rebuilt: ${data.requests_cleared}`
+  );
+  await loadRequests();
+  if (currentDetailReqId) {
+    openDetailModal(currentDetailReqId);
+  }
 }
 
 // --- Admin Edit Player ---
