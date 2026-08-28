@@ -49,6 +49,85 @@ const STAT_DESC = {
   flair: "How often they turn a round from -x to +x with their last shot",
 };
 
+const STAT_KEYS = Object.keys(STAT_NAMES);
+
+function computeOverallFromValues(values) {
+  if (!values.length) return null;
+  return Math.round(values.reduce((sum, val) => sum + val, 0) / values.length);
+}
+
+function computeOverallFromRequest(r, prefix) {
+  const values = STAT_KEYS.map((key) => r[`${prefix}_${key}`]);
+  if (values.some((v) => v == null)) return null;
+  return computeOverallFromValues(values);
+}
+
+function getRequestOverallChange(r, player) {
+  if (!player || r.request_type === "new_player") return null;
+
+  const proposedOverall = computeOverallFromRequest(r, "proposed");
+  if (proposedOverall == null) return null;
+
+  const isApproved = r.status === "approved";
+  if (isApproved) {
+    const beforeOverall = computeOverallFromRequest(r, "before");
+    if (beforeOverall == null) {
+      return { baseline: null, proposed: proposedOverall, diff: null, legacy: true };
+    }
+    return {
+      baseline: beforeOverall,
+      proposed: proposedOverall,
+      diff: proposedOverall - beforeOverall,
+      legacy: false,
+    };
+  }
+
+  return {
+    baseline: player.overall,
+    proposed: proposedOverall,
+    diff: proposedOverall - player.overall,
+    legacy: false,
+  };
+}
+
+function renderOverallChangePill(r, player) {
+  const change = getRequestOverallChange(r, player);
+  if (!change) return "";
+
+  if (change.legacy) {
+    return `<span class="stat-change-pill overall-pill">Overall: ${change.proposed}</span>`;
+  }
+  if (change.diff === 0) return "";
+
+  const cls = change.diff > 0 ? "up" : "down";
+  const sign = change.diff > 0 ? "+" : "";
+  return `<span class="stat-change-pill overall-pill ${cls}">Overall ${sign}${change.diff}</span>`;
+}
+
+function renderOverallCompareRow(r, player) {
+  const change = getRequestOverallChange(r, player);
+  if (!change) return "";
+
+  if (change.legacy) {
+    return `
+    <div class="stat-compare-row overall-compare-row">
+      <span class="stat-compare-label">Overall</span>
+      <span class="stat-compare-current">—</span>
+      <span class="stat-compare-arrow">→</span>
+      <span class="stat-compare-proposed">${change.proposed}</span>
+    </div>`;
+  }
+
+  const cls = change.diff > 0 ? "up" : change.diff < 0 ? "down" : "same";
+  return `
+    <div class="stat-compare-row overall-compare-row">
+      <span class="stat-compare-label">Overall</span>
+      <span class="stat-compare-current">${change.baseline}</span>
+      <span class="stat-compare-arrow">→</span>
+      <span class="stat-compare-proposed ${cls}">${change.proposed}</span>
+    </div>`;
+}
+
 function getStoredName() {
   return localStorage.getItem("bocce_name") || "";
 }
@@ -244,6 +323,7 @@ function renderRequestCard(r) {
 
   if (!isNewPlayer && player) {
     const isApproved = r.status === "approved";
+    const overallPill = renderOverallChangePill(r, player);
     statPills = Object.keys(STAT_NAMES)
       .map((key) => {
         const proposed = r[`proposed_${key}`];
@@ -269,6 +349,7 @@ function renderRequestCard(r) {
         return `<span class="stat-change-pill ${cls}">${STAT_FULL[key]} ${sign}${diff}</span>`;
       })
       .join("");
+    statPills = overallPill + statPills;
   }
 
   const tagLabel = isNewPlayer ? "NEW PLAYER" : r.player_name;
@@ -514,7 +595,7 @@ async function openDetailModal(reqId) {
   let statsHtml = "";
   if (player) {
     const isApproved = r.status === "approved";
-    statsHtml = Object.keys(STAT_NAMES)
+    statsHtml = renderOverallCompareRow(r, player) + Object.keys(STAT_NAMES)
       .map((key) => {
         const proposed = r[`proposed_${key}`];
         if (proposed == null) return "";

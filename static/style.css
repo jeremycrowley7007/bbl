@@ -954,6 +954,22 @@ main {
 .stat-change-pill.up { background: rgba(42, 157, 110, 0.1); color: var(--green); }
 .stat-change-pill.down { background: rgba(212, 74, 74, 0.1); color: var(--red); }
 
+.stat-change-pill.overall-pill {
+  background: rgba(200, 148, 42, 0.14);
+  color: var(--accent-dark);
+  font-weight: 700;
+}
+
+.stat-change-pill.overall-pill.up {
+  background: rgba(42, 157, 110, 0.16);
+  color: var(--green);
+}
+
+.stat-change-pill.overall-pill.down {
+  background: rgba(212, 74, 74, 0.14);
+  color: var(--red);
+}
+
 
 .status-badge {
   font-size: 0.7rem;
@@ -1256,6 +1272,16 @@ main {
   padding: 0.4rem 0.75rem;
   background: var(--bg);
   border-radius: var(--radius-sm);
+}
+
+.stat-compare-row.overall-compare-row {
+  background: rgba(200, 148, 42, 0.1);
+  border: 1px solid rgba(200, 148, 42, 0.22);
+  font-weight: 600;
+}
+
+.stat-compare-row.overall-compare-row .stat-compare-label {
+  color: var(--accent-dark);
 }
 
 .stat-compare-label {
