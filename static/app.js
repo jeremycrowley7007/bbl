@@ -214,14 +214,22 @@ function renderRequests(reqs) {
   const container = document.getElementById("requests-list");
 
   if (reqs.length === 0) {
+    const openCta =
+      currentTab === "open"
+        ? `<div class="empty-state-actions">
+            <button type="button" class="btn btn-primary" onclick="leagueStatChange()">Request Stat Change</button>
+            <button type="button" class="btn btn-secondary" onclick="leagueNewPlayer()">New Player</button>
+          </div>`
+        : "";
     container.innerHTML = `
       <div class="empty-state">
         <div class="emoji">${currentTab === "open" ? "🎯" : "📋"}</div>
         <p>${
           currentTab === "open"
-            ? "No open requests. Think someone's stats need updating?"
+            ? "No open requests yet. Think someone's stats need updating?"
             : "No past requests yet."
         }</p>
+        ${openCta}
       </div>`;
     return;
   }
@@ -400,6 +408,10 @@ function openCardZoom(playerId) {
 
   const overlay = document.getElementById("card-zoom-overlay");
   overlay.innerHTML = `
+    <button type="button" class="card-zoom-back" onclick="event.stopPropagation(); closeCardZoom()" aria-label="Back to roster">
+      <span class="card-zoom-back-icon" aria-hidden="true">&larr;</span>
+      Back to Roster
+    </button>
     <div class="card-zoom-content" onclick="event.stopPropagation()">
       <div class="card-zoom-card fut-card tier-${tier}">
         <div class="fut-card-inner">
@@ -1691,6 +1703,36 @@ const GD_TEAMS = [
 const gdSelected = new Set();
 let gdGuests = [];
 let gdGuestCounter = 0;
+let gdSeparationGroups = [];
+let gdSepDraft = new Set();
+let gdSepMode = false;
+let gdRevealRunning = false;
+
+const GD_SEP_LABELS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+
+function gdPlayerKey(p) {
+  return p.isGuest ? p.id : String(p.id);
+}
+
+function gdPlayerName(id) {
+  if (id.startsWith("g_")) {
+    const guest = gdGuests.find((g) => g.id === id);
+    return guest ? guest.name : "Guest";
+  }
+  const p = players.find((pl) => String(pl.id) === id);
+  return p ? p.name : "Player";
+}
+
+function gdSepGroupLabel(index) {
+  return GD_SEP_LABELS[index] || String(index + 1);
+}
+
+function gdPlayerSepClasses(id) {
+  const classes = [];
+  if (gdSepMode && gdSepDraft.has(id)) classes.push("sep-draft");
+  if (gdSeparationGroups.some((g) => g.includes(id))) classes.push("sep-grouped");
+  return classes.join(" ");
+}
 
 function gdGetTeamSplit(n) {
   switch (n) {
@@ -1715,6 +1757,9 @@ function openGameDayPicker() {
   gdSelected.clear();
   gdGuests = [];
   gdGuestCounter = 0;
+  gdSeparationGroups = [];
+  gdSepDraft = new Set();
+  gdSepMode = false;
   document.getElementById("gd-stage-pick").classList.add("active");
   document.getElementById("gd-stage-reveal").classList.remove("active");
   document.getElementById("gd-stage-reveal").innerHTML = `
@@ -1723,6 +1768,7 @@ function openGameDayPicker() {
     <div id="gd-reveal-content" class="gd-reveal-content"></div>
     <div id="gd-reveal-actions" class="gd-reveal-actions"></div>`;
   gdRenderPickStage();
+  gdRenderSepSection();
   document.getElementById("game-day-overlay").classList.add("visible");
   document.body.style.overflow = "hidden";
 }
@@ -1740,6 +1786,98 @@ function gdRenderPickStage() {
   ];
   grid.innerHTML = cards.join("");
   gdUpdateSummary();
+  gdRenderSepSection();
+}
+
+function gdRenderSepSection() {
+  const draftEl = document.getElementById("gd-sep-draft");
+  const groupsEl = document.getElementById("gd-sep-groups");
+  const newBtn = document.getElementById("gd-sep-new-btn");
+  const saveBtn = document.getElementById("gd-sep-save-btn");
+  const cancelBtn = document.getElementById("gd-sep-cancel-btn");
+  const subtitle = document.getElementById("gd-subtitle");
+
+  if (!draftEl || !groupsEl) return;
+
+  newBtn.classList.toggle("hidden", gdSepMode);
+  saveBtn.classList.toggle("hidden", !gdSepMode);
+  cancelBtn.classList.toggle("hidden", !gdSepMode);
+  saveBtn.disabled = gdSepDraft.size < 2;
+
+  subtitle.textContent = gdSepMode
+    ? "Tap players who shouldn't share a team, then save the group."
+    : "Tap to pick. Add guests if needed. Let fate sort the rest.";
+
+  if (gdSepMode) {
+    draftEl.classList.remove("hidden");
+    if (gdSepDraft.size === 0) {
+      draftEl.innerHTML = `<span class="gd-sep-draft-empty">Select 2 or more players for this group</span>`;
+    } else {
+      draftEl.innerHTML = [...gdSepDraft]
+        .map(
+          (id) =>
+            `<span class="gd-sep-chip draft">${escapeHtml(gdPlayerName(id))}</span>`
+        )
+        .join("");
+    }
+  } else {
+    draftEl.classList.add("hidden");
+    draftEl.innerHTML = "";
+  }
+
+  if (gdSeparationGroups.length === 0) {
+    groupsEl.innerHTML = "";
+    return;
+  }
+
+  groupsEl.innerHTML = gdSeparationGroups
+    .map(
+      (group, i) => `
+      <div class="gd-sep-group-row">
+        <span class="gd-sep-group-tag">Set ${gdSepGroupLabel(i)}</span>
+        <span class="gd-sep-group-names">${group.map((id) => escapeHtml(gdPlayerName(id))).join(" · ")}</span>
+        <button type="button" class="gd-sep-remove" onclick="gdRemoveSepGroup(${i})" title="Remove group">&times;</button>
+      </div>`
+    )
+    .join("");
+}
+
+function gdToggleSepMode() {
+  gdSepMode = true;
+  gdSepDraft = new Set();
+  gdRenderPickStage();
+}
+
+function gdCancelSepMode() {
+  gdSepMode = false;
+  gdSepDraft = new Set();
+  gdRenderPickStage();
+}
+
+function gdSaveSepGroup() {
+  if (gdSepDraft.size < 2) return;
+  gdSeparationGroups.push([...gdSepDraft]);
+  gdSepMode = false;
+  gdSepDraft = new Set();
+  gdRenderPickStage();
+}
+
+function gdRemoveSepGroup(index) {
+  gdSeparationGroups.splice(index, 1);
+  gdRenderPickStage();
+}
+
+function gdToggleSepDraft(id) {
+  if (gdSepDraft.has(id)) {
+    gdSepDraft.delete(id);
+  } else {
+    gdSepDraft.add(id);
+  }
+  const el = document.querySelector(`.gd-pick-card[data-gd-id="${id}"]`);
+  if (el) {
+    el.classList.toggle("sep-draft", gdSepDraft.has(id));
+  }
+  gdRenderSepSection();
 }
 
 function gdRenderPickCard(p, isGuest) {
@@ -1809,8 +1947,10 @@ function gdRenderPickCard(p, isGuest) {
     ? `<div class="gd-guest-remove" onclick="event.stopPropagation(); gdRemoveGuest('${id}')" title="Remove guest">&times;</div>`
     : "";
 
+  const sepClasses = gdPlayerSepClasses(id);
+
   return `
-    <div class="gd-pick-card fut-card tier-${tier} ${selected ? "selected" : ""}"
+    <div class="gd-pick-card fut-card tier-${tier} ${selected ? "selected" : ""} ${sepClasses}"
          onclick="gdToggleSelect('${id}')" data-gd-id="${id}">
       <div class="gd-pick-check">&#10003;</div>
       ${removeBtn}
@@ -1824,6 +1964,10 @@ function gdRenderPickCard(p, isGuest) {
 }
 
 function gdToggleSelect(id) {
+  if (gdSepMode) {
+    gdToggleSepDraft(id);
+    return;
+  }
   if (gdSelected.has(id)) {
     gdSelected.delete(id);
   } else {
@@ -1879,6 +2023,7 @@ function gdUpdateSummary(bump) {
   const formatEl = document.getElementById("gd-format");
   const btn = document.getElementById("gd-pick-btn");
   const split = gdGetTeamSplit(n);
+  const sepCheck = gdValidateSeparationForPick(split);
 
   if (n < 2) {
     formatEl.textContent = "Pick at least 2 players";
@@ -1892,11 +2037,32 @@ function gdUpdateSummary(bump) {
     formatEl.textContent = "Invalid count";
     formatEl.classList.add("invalid");
     btn.disabled = true;
+  } else if (!sepCheck.ok) {
+    formatEl.textContent = sepCheck.message;
+    formatEl.classList.add("invalid");
+    btn.disabled = true;
   } else {
-    formatEl.textContent = `${n} PLAYERS  →  ${gdFormatString(split)}`;
+    const sepNote =
+      gdSeparationGroups.length > 0 ? " · keep-apart rules on" : "";
+    formatEl.textContent = `${n} PLAYERS  →  ${gdFormatString(split)}${sepNote}`;
     formatEl.classList.remove("invalid");
     btn.disabled = false;
   }
+}
+
+function gdValidateSeparationForPick(split) {
+  if (!split || gdSeparationGroups.length === 0) return { ok: true };
+  const numTeams = split.length;
+  for (let i = 0; i < gdSeparationGroups.length; i++) {
+    const active = gdSeparationGroups[i].filter((id) => gdSelected.has(id));
+    if (active.length > numTeams) {
+      return {
+        ok: false,
+        message: `SET ${gdSepGroupLabel(i)} HAS ${active.length} PLAYERS — NEED MORE TEAMS`,
+      };
+    }
+  }
+  return { ok: true };
 }
 
 // --- Team generation ---
@@ -1915,11 +2081,7 @@ function gdBuildSelectedPool() {
   return pool;
 }
 
-function gdGenerateTeams() {
-  const pool = shuffle(gdBuildSelectedPool());
-  const split = gdGetTeamSplit(pool.length);
-  if (!split) return null;
-
+function gdTeamsFromPool(pool, split) {
   const teams = [];
   let cursor = 0;
   for (let i = 0; i < split.length; i++) {
@@ -1934,32 +2096,109 @@ function gdGenerateTeams() {
   return teams;
 }
 
+function gdTeamsSatisfySeparation(teams, groups) {
+  if (!groups.length) return true;
+  for (const team of teams) {
+    const ids = team.players.map(gdPlayerKey);
+    for (const group of groups) {
+      let count = 0;
+      for (const id of group) {
+        if (ids.includes(id)) count++;
+      }
+      if (count > 1) return false;
+    }
+  }
+  return true;
+}
+
+function gdGenerateTeamsConstrained(pool, split) {
+  const numTeams = split.length;
+  const teams = split.map((size, i) => ({
+    ...GD_TEAMS[i % GD_TEAMS.length],
+    index: i,
+    players: [],
+    maxSize: size,
+  }));
+
+  const order = shuffle([...pool]);
+  for (const player of order) {
+    const pid = gdPlayerKey(player);
+    const valid = teams.filter((t) => {
+      if (t.players.length >= t.maxSize) return false;
+      const teamIds = t.players.map(gdPlayerKey);
+      for (const group of gdSeparationGroups) {
+        if (!group.includes(pid)) continue;
+        if (teamIds.some((id) => group.includes(id))) return false;
+      }
+      return true;
+    });
+    if (!valid.length) return null;
+    valid.sort((a, b) => a.players.length - b.players.length);
+    valid[0].players.push(player);
+  }
+
+  return teams.map(({ maxSize, ...team }) => team);
+}
+
+function gdGenerateTeams() {
+  const pool = gdBuildSelectedPool();
+  const split = gdGetTeamSplit(pool.length);
+  if (!split) return null;
+
+  if (gdSeparationGroups.length === 0) {
+    return gdTeamsFromPool(shuffle([...pool]), split);
+  }
+
+  for (let attempt = 0; attempt < 500; attempt++) {
+    const teams = gdTeamsFromPool(shuffle([...pool]), split);
+    if (gdTeamsSatisfySeparation(teams, gdSeparationGroups)) return teams;
+  }
+
+  return gdGenerateTeamsConstrained(pool, split);
+}
+
 // --- Reveal sequence ---
 
 const wait = (ms) => new Promise((res) => setTimeout(res, ms));
 
 async function gdStartReveal() {
+  if (gdRevealRunning) return;
+
   const teams = gdGenerateTeams();
-  if (!teams) return;
-
-  document.getElementById("gd-stage-pick").classList.remove("active");
-  document.getElementById("gd-stage-reveal").classList.add("active");
-
-  const content = document.getElementById("gd-reveal-content");
-  content.innerHTML = `<div class="gd-picking-text">PICKING TEAMS...</div>`;
-  document.getElementById("gd-reveal-actions").classList.remove("visible");
-  document.getElementById("gd-reveal-actions").innerHTML = "";
-
-  await wait(1400);
-
-  content.innerHTML = "";
-
-  for (let i = 0; i < teams.length; i++) {
-    await gdRevealTeam(teams[i], content);
+  if (!teams) {
+    alert(
+      "Couldn't build fair teams with the current keep-apart groups. Try removing a group or changing who's playing."
+    );
+    return;
   }
 
-  await wait(450);
-  gdShowFinalActions();
+  gdRevealRunning = true;
+
+  try {
+    document.getElementById("gd-stage-pick").classList.remove("active");
+    document.getElementById("gd-stage-reveal").classList.add("active");
+
+    const overlay = document.getElementById("game-day-overlay");
+    if (overlay) overlay.scrollTo({ top: 0, behavior: "smooth" });
+
+    const content = document.getElementById("gd-reveal-content");
+    content.innerHTML = `<div class="gd-picking-text">PICKING TEAMS...</div>`;
+    document.getElementById("gd-reveal-actions").classList.remove("visible");
+    document.getElementById("gd-reveal-actions").innerHTML = "";
+
+    await wait(1400);
+
+    content.innerHTML = "";
+
+    for (let i = 0; i < teams.length; i++) {
+      await gdRevealTeam(teams[i], content);
+    }
+
+    await wait(450);
+    gdShowFinalActions();
+  } finally {
+    gdRevealRunning = false;
+  }
 }
 
 async function gdRevealTeam(team, container) {
@@ -2104,14 +2343,10 @@ function gdShowFinalActions() {
   const actions = document.getElementById("gd-reveal-actions");
   actions.innerHTML = `
     <button class="gd-lets-go" onclick="closeGameDayPicker()">LET'S GO!</button>
-    <button class="gd-pick-again" onclick="gdBackToPick()">Pick Again</button>`;
+    <button class="gd-pick-again" onclick="gdPickAgain()">Pick Again</button>`;
   actions.classList.add("visible");
 }
 
-function gdBackToPick() {
-  document.getElementById("gd-stage-reveal").classList.remove("active");
-  document.getElementById("gd-stage-pick").classList.add("active");
-  document.getElementById("gd-reveal-actions").classList.remove("visible");
-  // keep selected players & guests; user can tweak then re-pick
-  window.scrollTo({ top: 0, behavior: "smooth" });
+function gdPickAgain() {
+  gdStartReveal();
 }

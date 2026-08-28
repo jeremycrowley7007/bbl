@@ -5,7 +5,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>(BBL) Bocce Ball League</title>
-  <link rel="stylesheet" href="/static/style.css">
+  <link rel="stylesheet" href="/static/style.css?v=2">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link
     href="https://fonts.googleapis.com/css2?family=Oswald:wght@400;500;600;700&family=Inter:wght@400;500;600;700&display=swap"
@@ -16,7 +16,14 @@
   <header>
     <div class="header-inner">
       <h1>(BBL) BOCCE BALL LEAGUE</h1>
-      <button class="btn btn-admin" id="admin-toggle-btn" onclick="toggleAdminMode()">Admin</button>
+      <div class="header-actions">
+        <button type="button" class="btn-header btn-header-stat" onclick="leagueStatChange()">+ Stat Change</button>
+        <span class="header-actions-divider" aria-hidden="true"></span>
+        <button type="button" class="btn-header btn-header-secondary" onclick="openGameDayPicker()">Team Picker</button>
+        <button type="button" class="btn-header btn-header-secondary" onclick="leagueLogResult()">Log Result</button>
+        <button type="button" class="btn-header btn-header-secondary" onclick="leagueNewPlayer()">New Player</button>
+        <button class="btn btn-admin" id="admin-toggle-btn" onclick="toggleAdminMode()">Admin</button>
+      </div>
     </div>
   </header>
 
@@ -28,15 +35,6 @@
         <p class="hero-description">
           It all about placement until its not and then its about bowling.
         </p>
-        <button class="btn-game-day" onclick="openGameDayPicker()">
-          <span class="gd-cta-label">GAME DAY</span>
-          <span class="gd-cta-sub">Pick Teams</span>
-        </button>
-        <div class="hero-secondary">
-          <button class="btn-log-result" onclick="openLogGameModal()">
-            <span class="lg-cta-icon">&#9971;</span> LOG GAME RESULT
-          </button>
-        </div>
       </div>
     </section>
 
@@ -56,11 +54,6 @@
     <section id="league-section">
       <h2 class="section-title">THE LEAGUE</h2>
       <div class="league-header">
-        <div class="league-actions">
-          <button type="button" class="btn btn-primary btn-compact" onclick="leagueLogResult()">+ Log Result</button>
-          <button type="button" class="btn btn-secondary btn-compact" onclick="leagueNewPlayer()">+ Player</button>
-          <button type="button" class="btn btn-secondary btn-compact" onclick="leagueStatChange()">+ Stat Change</button>
-        </div>
         <nav class="league-nav" aria-label="League views">
           <button type="button" class="league-tab active" data-tab="standings" onclick="switchTab('standings')">
             Player Standings
@@ -218,8 +211,8 @@
     <!-- STAGE 1: PICK PLAYERS -->
     <div id="gd-stage-pick" class="gd-stage gd-stage-pick">
       <div class="gd-pick-header">
-        <h2 class="gd-title">GAME DAY</h2>
-        <p class="gd-subtitle">Tap to pick. Add guests if needed. Let fate sort the rest.</p>
+        <h2 class="gd-title">TEAM PICKER</h2>
+        <p class="gd-subtitle" id="gd-subtitle">Tap to pick. Add guests if needed. Let fate sort the rest.</p>
       </div>
 
       <div class="gd-pick-actions">
@@ -228,6 +221,20 @@
       </div>
 
       <div id="gd-player-grid" class="gd-player-grid"></div>
+
+      <div class="gd-sep-section">
+        <div class="gd-sep-header">
+          <span class="gd-sep-label">Keep Apart</span>
+          <span class="gd-sep-hint">Players in a group won't end up on the same team</span>
+        </div>
+        <div class="gd-sep-actions">
+          <button type="button" class="gd-mini-btn" id="gd-sep-new-btn" onclick="gdToggleSepMode()">+ New Group</button>
+          <button type="button" class="gd-mini-btn gd-sep-save hidden" id="gd-sep-save-btn" onclick="gdSaveSepGroup()" disabled>Save Group</button>
+          <button type="button" class="gd-mini-btn gd-sep-cancel hidden" id="gd-sep-cancel-btn" onclick="gdCancelSepMode()">Cancel</button>
+        </div>
+        <div id="gd-sep-draft" class="gd-sep-draft hidden"></div>
+        <div id="gd-sep-groups" class="gd-sep-groups"></div>
+      </div>
 
       <div class="gd-guest-section">
         <div class="gd-guest-row">
@@ -281,7 +288,7 @@
     </div>
   </div>
 
-  <script src="/static/app.js"></script>
+  <script src="/static/app.js?v=2"></script>
 </body>
 
 </html>

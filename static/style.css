@@ -55,6 +55,77 @@ header h1 {
   color: #f0dca8;
 }
 
+.header-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+}
+
+.btn-header {
+  font-family: 'Inter', sans-serif;
+  font-weight: 600;
+  font-size: 0.78rem;
+  padding: 0.5rem 0.95rem;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: all 0.2s;
+  white-space: nowrap;
+}
+
+.btn-header-primary {
+  background: linear-gradient(135deg, var(--accent), var(--accent-dark));
+  color: #fff;
+  border: none;
+}
+
+.btn-header-primary:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 16px rgba(200, 148, 42, 0.4);
+}
+
+.btn-header-stat {
+  background: linear-gradient(135deg, #e0a832 0%, var(--accent) 45%, var(--accent-dark) 100%);
+  color: #fff;
+  border: none;
+  font-size: 0.88rem;
+  font-weight: 700;
+  padding: 0.62rem 1.25rem;
+  letter-spacing: 0.03em;
+  box-shadow: 0 2px 14px rgba(200, 148, 42, 0.45);
+}
+
+.btn-header-stat:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 20px rgba(200, 148, 42, 0.55);
+}
+
+.header-actions-divider {
+  width: 1px;
+  height: 1.4rem;
+  background: rgba(255, 255, 255, 0.18);
+  flex-shrink: 0;
+}
+
+.header-actions .btn-admin {
+  font-size: 0.78rem;
+  padding: 0.5rem 1rem;
+  min-width: 0;
+}
+
+.btn-header-secondary {
+  background: rgba(255, 255, 255, 0.1);
+  color: #f0dca8;
+  border: 1px solid rgba(255, 255, 255, 0.25);
+}
+
+.btn-header-secondary:hover {
+  background: rgba(255, 255, 255, 0.18);
+  color: #fff;
+  border-color: rgba(255, 255, 255, 0.4);
+}
+
 /* ============ Buttons ============ */
 .btn {
   font-family: 'Inter', sans-serif;
@@ -553,14 +624,35 @@ main {
   letter-spacing: 0.02em;
 }
 
+.btn-game-day-compact {
+  font-family: 'Inter', sans-serif;
+  font-weight: 600;
+  font-size: 0.75rem;
+  letter-spacing: 0.02em;
+  padding: 0.45rem 0.85rem;
+  background: transparent;
+  color: var(--red);
+  border: 1px solid rgba(212, 74, 74, 0.45);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: background 0.2s, border-color 0.2s, color 0.2s;
+}
+
+.btn-game-day-compact:hover {
+  background: rgba(212, 74, 74, 0.08);
+  border-color: var(--red);
+  color: #b83838;
+}
+
 @media (max-width: 768px) {
   .league-actions {
     display: grid;
-    grid-template-columns: repeat(3, 1fr);
+    grid-template-columns: repeat(2, 1fr);
     gap: 0.35rem;
   }
 
-  .league-actions .btn-compact {
+  .league-actions .btn-compact,
+  .league-actions .btn-game-day-compact {
     width: 100%;
     padding: 0.5rem 0.35rem;
     font-size: 0.7rem;
@@ -1519,6 +1611,14 @@ body.admin-active header {
 .empty-state .emoji { font-size: 2.5rem; margin-bottom: 0.5rem; }
 .empty-state p { font-size: 0.9rem; }
 
+.empty-state-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 0.5rem;
+  margin-top: 1rem;
+}
+
 /* ============ Card Zoom Overlay ============ */
 .card-zoom-overlay {
   display: none;
@@ -1534,6 +1634,38 @@ body.admin-active header {
 }
 
 .card-zoom-overlay.visible { display: flex; }
+
+.card-zoom-back {
+  position: fixed;
+  top: 1.25rem;
+  left: 1.25rem;
+  z-index: 1;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  font-family: 'Inter', sans-serif;
+  font-weight: 600;
+  font-size: 0.9rem;
+  padding: 0.65rem 1.1rem;
+  background: rgba(255, 255, 255, 0.12);
+  color: #fff;
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  backdrop-filter: blur(6px);
+  transition: background 0.2s, border-color 0.2s, transform 0.15s;
+}
+
+.card-zoom-back:hover {
+  background: rgba(255, 255, 255, 0.2);
+  border-color: rgba(255, 255, 255, 0.45);
+  transform: translateX(-2px);
+}
+
+.card-zoom-back-icon {
+  font-size: 1.1rem;
+  line-height: 1;
+}
 
 @keyframes zoomFadeIn {
   from { opacity: 0; }
@@ -1727,7 +1859,46 @@ body.admin-active header {
 
   header { padding: 0.75rem 1rem; }
 
-  .header-inner { flex-direction: column; gap: 0.75rem; }
+  .header-inner { flex-direction: column; gap: 0.75rem; align-items: stretch; }
+
+  .header-actions {
+    justify-content: center;
+    width: 100%;
+    gap: 0.35rem;
+  }
+
+  .header-actions-divider {
+    display: none;
+  }
+
+  .btn-header-stat {
+    width: 100%;
+    flex: 1 1 100%;
+    text-align: center;
+    font-size: 0.9rem;
+    padding: 0.7rem 1rem;
+    margin-bottom: 0.15rem;
+  }
+
+  .btn-header {
+    flex: 1 1 calc(50% - 0.2rem);
+    min-width: 0;
+    padding: 0.55rem 0.5rem;
+    font-size: 0.7rem;
+  }
+
+  .header-actions .btn-admin {
+    flex: 1 1 calc(50% - 0.2rem);
+    padding: 0.55rem 0.5rem;
+    font-size: 0.7rem;
+  }
+
+  .card-zoom-back {
+    top: 0.75rem;
+    left: 0.75rem;
+    font-size: 0.82rem;
+    padding: 0.55rem 0.85rem;
+  }
 
   main { padding: 1rem; }
 
@@ -1970,6 +2141,167 @@ body.admin-active header {
 .gd-pick-card .fut-card-stats { padding: 4px 12px 6px; }
 .gd-pick-card .fut-stat-val { font-size: 0.75rem; }
 .gd-pick-card .fut-stat-label { font-size: 0.55rem; }
+
+.gd-pick-card.sep-draft {
+  outline: 2px solid #ffb347;
+  outline-offset: 2px;
+  box-shadow: 0 0 18px rgba(255, 179, 71, 0.35);
+}
+
+.gd-pick-card.sep-grouped:not(.sep-draft)::after {
+  content: "";
+  position: absolute;
+  top: 6px;
+  left: 6px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #ffb347;
+  box-shadow: 0 0 8px rgba(255, 179, 71, 0.6);
+  z-index: 6;
+}
+
+.gd-mini-btn.hidden { display: none; }
+
+/* Keep-apart groups */
+.gd-sep-section {
+  max-width: 720px;
+  margin: 0 auto 1.25rem;
+  padding: 0.85rem 1rem;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(240, 220, 168, 0.14);
+  border-radius: var(--radius-sm);
+}
+
+.gd-sep-header {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.2rem;
+  margin-bottom: 0.65rem;
+  text-align: center;
+}
+
+.gd-sep-label {
+  font-family: 'Oswald', sans-serif;
+  font-size: 0.85rem;
+  font-weight: 600;
+  letter-spacing: 2px;
+  color: #f0dca8;
+}
+
+.gd-sep-hint {
+  font-size: 0.72rem;
+  color: rgba(240, 220, 168, 0.55);
+}
+
+.gd-sep-actions {
+  display: flex;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin-bottom: 0.55rem;
+}
+
+.gd-sep-save:not(:disabled) {
+  background: rgba(255, 179, 71, 0.18);
+  border-color: rgba(255, 179, 71, 0.55);
+  color: #ffd89a;
+}
+
+.gd-sep-save:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.gd-sep-cancel {
+  color: rgba(240, 220, 168, 0.65);
+}
+
+.gd-sep-draft {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 0.35rem;
+  margin-bottom: 0.55rem;
+  min-height: 1.5rem;
+}
+
+.gd-sep-draft.hidden { display: none; }
+
+.gd-sep-draft-empty {
+  font-size: 0.72rem;
+  color: rgba(255, 179, 71, 0.75);
+  font-style: italic;
+}
+
+.gd-sep-chip {
+  font-size: 0.72rem;
+  padding: 0.25rem 0.55rem;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.08);
+  color: rgba(240, 220, 168, 0.85);
+}
+
+.gd-sep-chip.draft {
+  background: rgba(255, 179, 71, 0.15);
+  border: 1px solid rgba(255, 179, 71, 0.35);
+  color: #ffd89a;
+}
+
+.gd-sep-groups {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.gd-sep-group-row {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  padding: 0.45rem 0.65rem;
+  background: rgba(0, 0, 0, 0.18);
+  border-radius: var(--radius-sm);
+  border: 1px solid rgba(240, 220, 168, 0.1);
+}
+
+.gd-sep-group-tag {
+  flex-shrink: 0;
+  font-family: 'Oswald', sans-serif;
+  font-size: 0.68rem;
+  font-weight: 600;
+  letter-spacing: 1px;
+  color: #ffb347;
+  padding: 0.15rem 0.45rem;
+  border: 1px solid rgba(255, 179, 71, 0.35);
+  border-radius: 4px;
+}
+
+.gd-sep-group-names {
+  flex: 1;
+  font-size: 0.75rem;
+  color: rgba(240, 220, 168, 0.8);
+  line-height: 1.35;
+}
+
+.gd-sep-remove {
+  flex-shrink: 0;
+  width: 1.5rem;
+  height: 1.5rem;
+  border: none;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.08);
+  color: rgba(240, 220, 168, 0.7);
+  font-size: 1rem;
+  line-height: 1;
+  cursor: pointer;
+  transition: background 0.2s, color 0.2s;
+}
+
+.gd-sep-remove:hover {
+  background: rgba(212, 74, 74, 0.35);
+  color: #fff;
+}
 
 /* Guest temp tier — dashed white/gray */
 .fut-card.tier-temp .fut-card-inner {
