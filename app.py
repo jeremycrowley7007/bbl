@@ -463,14 +463,54 @@ def verify_reconciliation(db, sim):
     return report
 
 
-def replay_request_snapshots(db, reset_at, baseline=LEAGUE_BASELINE):
-    """Rebuild before_* by replaying requests from a league reset forward.
+def _ensure_sim_player(sim, players, pid, reset_at, baseline, db):
+    if pid in sim:
+        return
+    if players[pid]["created_at"] > reset_at:
+        sim[pid] = stats_before_all_approvals(db, pid)
+    else:
+        sim[pid] = {f: baseline for f in STAT_FIELDS}
 
-    Assumes every player was at ``baseline`` after ``reset_at``, then walks
-    requests in time order: snapshot stats at creation, apply approved changes
-    at close. Players who joined after the reset start from stats derived by
-    reversing their approval chain from the current roster row.
-    """
+
+def _history_old_value(db, req_id, field):
+    row = db.execute(
+        """SELECT old_value FROM stat_history
+           WHERE request_id=? AND stat_field=? AND source='request_approved'
+           LIMIT 1""",
+        (req_id, field),
+    ).fetchone()
+    return row["old_value"] if row else None
+
+
+def _anchor_player_snapshots_backward(db, pid, forward_snaps, player_row):
+    """Rebuild approved-request snapshots by walking backward from roster row."""
+    sim = {f: player_row[f] for f in STAT_FIELDS}
+    approved = db.execute(
+        """SELECT * FROM requests
+           WHERE player_id=? AND status='approved' AND closed_at IS NOT NULL
+           ORDER BY closed_at DESC, id DESC""",
+        (pid,),
+    ).fetchall()
+    anchored = {}
+    for req in approved:
+        fwd = forward_snaps.get(req["id"], {})
+        snap = {}
+        for f in STAT_FIELDS:
+            proposed = req[f"proposed_{f}"]
+            if proposed is not None:
+                old = _history_old_value(db, req["id"], f)
+                if old is None:
+                    old = fwd.get(f, sim[f])
+                snap[f] = old
+                sim[f] = old
+            else:
+                snap[f] = fwd.get(f, sim[f])
+        anchored[req["id"]] = snap
+    return anchored
+
+
+def replay_request_snapshots(db, reset_at, baseline=LEAGUE_BASELINE):
+    """Rebuild before_* by simulating from league reset forward, roster-anchored."""
     players = {
         p["id"]: p
         for p in db.execute("SELECT * FROM players").fetchall()
@@ -487,70 +527,79 @@ def replay_request_snapshots(db, reset_at, baseline=LEAGUE_BASELINE):
         "reset": 0,
         "player_join": 1,
         "request_created": 2,
-        "request_approved": 3,
+        "request_denied": 3,
+        "request_approved": 4,
     }
     events = [(reset_at, "reset", None, None)]
     for p in players.values():
         if p["created_at"] > reset_at:
             events.append((p["created_at"], "player_join", None, p["id"]))
     for r in requests:
-        events.append((r["created_at"], "request_created", r["id"], r["player_id"]))
+        if r["status"] == "open":
+            events.append((r["created_at"], "request_created", r["id"], r["player_id"]))
         if r["status"] == "approved" and r["closed_at"]:
             events.append((r["closed_at"], "request_approved", r["id"], r["player_id"]))
+        elif r["status"] == "denied":
+            ts = r["closed_at"] or r["created_at"]
+            events.append((ts, "request_denied", r["id"], r["player_id"]))
 
     events.sort(key=lambda e: (e[0], event_rank[e[1]], e[2] or 0))
 
     sim = {}
     snapshots = {}
 
-    def baseline_stats():
-        return {f: baseline for f in STAT_FIELDS}
-
     for _ts, kind, req_id, player_id in events:
         if kind == "reset":
             for pid, p in players.items():
                 if p["created_at"] <= _ts:
-                    sim[pid] = baseline_stats()
+                    sim[pid] = {f: baseline for f in STAT_FIELDS}
         elif kind == "player_join":
             sim[player_id] = stats_before_all_approvals(db, player_id)
         elif kind == "request_created":
             r = req_map[req_id]
             pid = r["player_id"]
-            if pid not in sim:
-                if players[pid]["created_at"] > reset_at:
-                    sim[pid] = stats_before_all_approvals(db, pid)
-                else:
-                    sim[pid] = baseline_stats()
-            # Denied/open keep submit-time snapshot; approved gets approval-time below.
-            if r["status"] != "approved":
-                snapshots[req_id] = dict(sim[pid])
+            _ensure_sim_player(sim, players, pid, reset_at, baseline, db)
+            snapshots[req_id] = dict(sim[pid])
+        elif kind == "request_denied":
+            r = req_map[req_id]
+            pid = r["player_id"]
+            _ensure_sim_player(sim, players, pid, reset_at, baseline, db)
+            snapshots[req_id] = dict(sim[pid])
         elif kind == "request_approved":
             r = req_map[req_id]
             pid = r["player_id"]
-            if pid not in sim:
-                if players[pid]["created_at"] > reset_at:
-                    sim[pid] = stats_before_all_approvals(db, pid)
-                else:
-                    sim[pid] = baseline_stats()
-            # Snapshot immediately before applying this approval so earlier same-day
-            # approvals are reflected (e.g. flair bump before placement bump).
+            _ensure_sim_player(sim, players, pid, reset_at, baseline, db)
             snapshots[req_id] = dict(sim[pid])
             for f in STAT_FIELDS:
                 proposed = r[f"proposed_{f}"]
-                if proposed is not None:
-                    old = sim[pid][f]
-                    db.execute(
-                        """UPDATE stat_history
-                           SET old_value=?, new_value=?
-                           WHERE request_id=? AND stat_field=? AND source='request_approved'""",
-                        (old, proposed, req_id, f),
+                if proposed is None:
+                    continue
+                old = sim[pid][f]
+                db.execute(
+                    """UPDATE stat_history
+                       SET old_value=?, new_value=?
+                       WHERE request_id=? AND stat_field=? AND source='request_approved'""",
+                    (old, proposed, req_id, f),
+                )
+                if db.execute("SELECT changes()").fetchone()[0] == 0:
+                    record_stat_change(
+                        db, pid, f, old, proposed,
+                        "request_approved", request_id=req_id,
                     )
-                    if db.execute("SELECT changes()").fetchone()[0] == 0:
-                        record_stat_change(
-                            db, pid, f, old, proposed,
-                            "request_approved", request_id=req_id,
-                        )
-                    sim[pid][f] = proposed
+                sim[pid][f] = proposed
+
+    reconciliation = verify_reconciliation(db, sim)
+    for pid, player in players.items():
+        has_approved = db.execute(
+            """SELECT 1 FROM requests
+               WHERE player_id=? AND status='approved' AND closed_at IS NOT NULL
+               LIMIT 1""",
+            (pid,),
+        ).fetchone()
+        if has_approved:
+            snapshots.update(
+                _anchor_player_snapshots_backward(db, pid, snapshots, player)
+            )
 
     for req_id, stats in snapshots.items():
         updates = [f"before_{f}=?" for f in STAT_FIELDS]
@@ -560,7 +609,6 @@ def replay_request_snapshots(db, reset_at, baseline=LEAGUE_BASELINE):
             values,
         )
 
-    reconciliation = verify_reconciliation(db, sim)
     return {
         "requests_updated": len(snapshots),
         "reconciliation_mismatches": len(reconciliation),
