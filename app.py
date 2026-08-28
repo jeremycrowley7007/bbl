@@ -521,7 +521,9 @@ def replay_request_snapshots(db, reset_at, baseline=LEAGUE_BASELINE):
                     sim[pid] = stats_before_all_approvals(db, pid)
                 else:
                     sim[pid] = baseline_stats()
-            snapshots[req_id] = dict(sim[pid])
+            # Denied/open keep submit-time snapshot; approved gets approval-time below.
+            if r["status"] != "approved":
+                snapshots[req_id] = dict(sim[pid])
         elif kind == "request_approved":
             r = req_map[req_id]
             pid = r["player_id"]
@@ -530,6 +532,9 @@ def replay_request_snapshots(db, reset_at, baseline=LEAGUE_BASELINE):
                     sim[pid] = stats_before_all_approvals(db, pid)
                 else:
                     sim[pid] = baseline_stats()
+            # Snapshot immediately before applying this approval so earlier same-day
+            # approvals are reflected (e.g. flair bump before placement bump).
+            snapshots[req_id] = dict(sim[pid])
             for f in STAT_FIELDS:
                 proposed = r[f"proposed_{f}"]
                 if proposed is not None:
