@@ -401,12 +401,75 @@ def delete_requests_before(db, cutoff):
     return len(ids)
 
 
+def _player_overall(stats):
+    return round(sum(stats[f] for f in STAT_FIELDS) / len(STAT_FIELDS))
+
+
+def stats_before_all_approvals(db, player_id):
+    """Reverse approved requests from the current player row.
+
+    Uses ``stat_history.old_value`` from live approvals when available so join
+    stats match the roster we have today.
+    """
+    player = db.execute("SELECT * FROM players WHERE id=?", (player_id,)).fetchone()
+    if not player:
+        return {f: LEAGUE_BASELINE for f in STAT_FIELDS}
+
+    sim = {f: player[f] for f in STAT_FIELDS}
+    approvals = db.execute(
+        """SELECT * FROM requests
+           WHERE player_id=? AND status='approved' AND closed_at IS NOT NULL
+           ORDER BY closed_at DESC, id DESC""",
+        (player_id,),
+    ).fetchall()
+
+    for req in approvals:
+        for f in STAT_FIELDS:
+            proposed = req[f"proposed_{f}"]
+            if proposed is None:
+                continue
+            row = db.execute(
+                """SELECT old_value FROM stat_history
+                   WHERE request_id=? AND stat_field=? AND source='request_approved'
+                   LIMIT 1""",
+                (req["id"], f),
+            ).fetchone()
+            if row and row["old_value"] is not None:
+                sim[f] = row["old_value"]
+    return sim
+
+
+def verify_reconciliation(db, sim):
+    """Compare replay end-state to current player rows."""
+    rows = db.execute("SELECT * FROM players ORDER BY id").fetchall()
+    report = []
+    for p in rows:
+        pid = p["id"]
+        if pid not in sim:
+            continue
+        diffs = {
+            f: {"sim": sim[pid][f], "actual": p[f]}
+            for f in STAT_FIELDS
+            if sim[pid][f] != p[f]
+        }
+        if diffs:
+            report.append({
+                "player_id": pid,
+                "name": p["name"],
+                "sim_overall": _player_overall(sim[pid]),
+                "actual_overall": _player_overall({f: p[f] for f in STAT_FIELDS}),
+                "diffs": diffs,
+            })
+    return report
+
+
 def replay_request_snapshots(db, reset_at, baseline=LEAGUE_BASELINE):
     """Rebuild before_* by replaying requests from a league reset forward.
 
     Assumes every player was at ``baseline`` after ``reset_at``, then walks
     requests in time order: snapshot stats at creation, apply approved changes
-    at close. This avoids relying on poisoned stat_history backfill rows.
+    at close. Players who joined after the reset start from stats derived by
+    reversing their approval chain from the current roster row.
     """
     players = {
         p["id"]: p
@@ -428,7 +491,8 @@ def replay_request_snapshots(db, reset_at, baseline=LEAGUE_BASELINE):
     }
     events = [(reset_at, "reset", None, None)]
     for p in players.values():
-        events.append((p["created_at"], "player_join", None, p["id"]))
+        if p["created_at"] > reset_at:
+            events.append((p["created_at"], "player_join", None, p["id"]))
     for r in requests:
         events.append((r["created_at"], "request_created", r["id"], r["player_id"]))
         if r["status"] == "approved" and r["closed_at"]:
@@ -448,21 +512,39 @@ def replay_request_snapshots(db, reset_at, baseline=LEAGUE_BASELINE):
                 if p["created_at"] <= _ts:
                     sim[pid] = baseline_stats()
         elif kind == "player_join":
-            sim[player_id] = baseline_stats()
+            sim[player_id] = stats_before_all_approvals(db, player_id)
         elif kind == "request_created":
             r = req_map[req_id]
             pid = r["player_id"]
             if pid not in sim:
-                sim[pid] = baseline_stats()
+                if players[pid]["created_at"] > reset_at:
+                    sim[pid] = stats_before_all_approvals(db, pid)
+                else:
+                    sim[pid] = baseline_stats()
             snapshots[req_id] = dict(sim[pid])
         elif kind == "request_approved":
             r = req_map[req_id]
             pid = r["player_id"]
             if pid not in sim:
-                sim[pid] = baseline_stats()
+                if players[pid]["created_at"] > reset_at:
+                    sim[pid] = stats_before_all_approvals(db, pid)
+                else:
+                    sim[pid] = baseline_stats()
             for f in STAT_FIELDS:
                 proposed = r[f"proposed_{f}"]
                 if proposed is not None:
+                    old = sim[pid][f]
+                    db.execute(
+                        """UPDATE stat_history
+                           SET old_value=?, new_value=?
+                           WHERE request_id=? AND stat_field=? AND source='request_approved'""",
+                        (old, proposed, req_id, f),
+                    )
+                    if db.execute("SELECT changes()").fetchone()[0] == 0:
+                        record_stat_change(
+                            db, pid, f, old, proposed,
+                            "request_approved", request_id=req_id,
+                        )
                     sim[pid][f] = proposed
 
     for req_id, stats in snapshots.items():
@@ -473,7 +555,19 @@ def replay_request_snapshots(db, reset_at, baseline=LEAGUE_BASELINE):
             values,
         )
 
-    return {"requests_updated": len(snapshots)}
+    reconciliation = verify_reconciliation(db, sim)
+    return {
+        "requests_updated": len(snapshots),
+        "reconciliation_mismatches": len(reconciliation),
+        "reconciliation": reconciliation,
+        "end_state": {
+            players[pid]["name"]: {
+                "overall": _player_overall(sim[pid]),
+                **sim[pid],
+            }
+            for pid in sim
+        },
+    }
 
 
 def scrub_stat_history_backfill(db):

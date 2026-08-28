@@ -19,7 +19,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 os.environ.setdefault("BBL_SKIP_INIT", "1")
 
-from app import DATABASE, LEAGUE_BASELINE, rerun_request_snapshot_backfill  # noqa: E402
+from app import DATABASE, LEAGUE_BASELINE, STAT_FIELDS, rerun_request_snapshot_backfill  # noqa: E402
 
 
 def preview(db: sqlite3.Connection, reset_at: str) -> None:
@@ -64,7 +64,31 @@ def main() -> None:
 
     print("=== RESULT ===")
     for k, v in result.items():
+        if k in ("reconciliation", "end_state"):
+            continue
         print(f"  {k}: {v}")
+
+    if result.get("reconciliation"):
+        print("\n=== RECONCILIATION MISMATCHES (replay end ≠ roster) ===")
+        for row in result["reconciliation"]:
+            print(
+                f"  {row['name']}: sim OVR {row['sim_overall']} vs roster OVR {row['actual_overall']}"
+            )
+            for field, diff in row["diffs"].items():
+                print(f"    {field}: sim={diff['sim']} actual={diff['actual']}")
+    else:
+        print("\n=== RECONCILIATION OK — replay end-state matches all roster rows ===")
+
+    jeremy = db.execute(
+        "SELECT id FROM players WHERE name='Jeremy' COLLATE NOCASE"
+    ).fetchone()
+    if jeremy and result.get("end_state", {}).get("Jeremy"):
+        end = result["end_state"]["Jeremy"]
+        roster = db.execute(
+            "SELECT * FROM players WHERE id=?", (jeremy["id"],)
+        ).fetchone()
+        roster_ovr = round(sum(roster[f] for f in STAT_FIELDS) / len(STAT_FIELDS))
+        print(f"\nJeremy: replay OVR {end['overall']} | roster OVR {roster_ovr}")
 
     print("\n=== AFTER ===")
     rows = db.execute(
