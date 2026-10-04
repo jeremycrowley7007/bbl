@@ -5,7 +5,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>(BBL) Bocce Ball League</title>
-  <link rel="stylesheet" href="/static/style.css?v=7">
+  <link rel="stylesheet" href="/static/style.css?v=11">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link
     href="https://fonts.googleapis.com/css2?family=Oswald:wght@400;500;600;700&family=Inter:wght@400;500;600;700&display=swap"
@@ -20,7 +20,6 @@
         <button type="button" class="btn-header btn-header-stat" onclick="leagueStatChange()">+ Stat Change</button>
         <span class="header-actions-divider" aria-hidden="true"></span>
         <button type="button" class="btn-header btn-header-secondary" onclick="openGameDayPicker()">Team Picker</button>
-        <button type="button" class="btn-header btn-header-secondary" onclick="leagueLogResult()">Log Result</button>
         <button type="button" class="btn-header btn-header-secondary" onclick="leagueNewPlayer()">New Player</button>
         <button class="btn btn-admin" id="admin-toggle-btn" onclick="toggleAdminMode()">Admin</button>
       </div>
@@ -55,22 +54,28 @@
       <h2 class="section-title">THE LEAGUE</h2>
       <div class="league-header">
         <nav class="league-nav" aria-label="League views">
-          <button type="button" class="league-tab active" data-tab="standings" onclick="switchTab('standings')">
-            Player Standings
-          </button>
-          <button type="button" class="league-tab" data-tab="log" onclick="switchTab('log')">
-            Game Log <span id="games-count" class="badge">0</span>
-          </button>
-          <button type="button" class="league-tab" data-tab="open" onclick="switchTab('open')">
+          <button type="button" class="league-tab active" data-tab="open" onclick="switchTab('open')">
             Open Requests <span id="open-count" class="badge">0</span>
           </button>
           <button type="button" class="league-tab" data-tab="closed" onclick="switchTab('closed')">
             Past Requests <span id="closed-count" class="badge">0</span>
           </button>
+          <button type="button" class="league-tab" data-tab="trophies" onclick="switchTab('trophies')">
+            Trophy Room
+          </button>
         </nav>
       </div>
-      <div id="games-body"></div>
-      <div id="requests-list" class="requests-container league-panel-hidden"></div>
+      <div id="requests-panel">
+        <div id="past-request-tools" class="past-request-tools league-panel-hidden">
+          <label for="past-player-filter">Show requests for</label>
+          <select id="past-player-filter" onchange="changePastPlayerFilter(this.value)">
+            <option value="">All players</option>
+          </select>
+        </div>
+        <div id="requests-list" class="requests-container"></div>
+        <div id="request-pagination" class="request-pagination"></div>
+      </div>
+      <div id="trophy-room" class="trophy-room league-panel-hidden"></div>
     </section>
   </main>
 
@@ -130,52 +135,40 @@
     </div>
   </div>
 
-  <!-- Log Game Result Modal -->
-  <div id="log-game-modal" class="modal" onclick="closeModal(event)">
+  <!-- Tournament Results Modal -->
+  <div id="tournament-modal" class="modal" onclick="closeModal(event)">
     <div class="modal-content modal-wide">
       <div class="modal-header">
-        <h3 id="lg-title">Log Game Result</h3>
-        <button class="modal-close" onclick="closeLogGameModal()">&times;</button>
+        <h3 id="tn-title">Add Tournament Results</h3>
+        <button class="modal-close" onclick="closeTournamentModal()">&times;</button>
       </div>
-
-      <div class="lg-teams-row">
-        <div class="lg-team-card team-0" id="lg-tab-0" onclick="lgSelectTeam(0)">
-          <div class="lg-team-card-top">
-            <span class="lg-team-name">TEAM 1</span>
-            <span class="lg-team-count" id="lg-count-0">0 / 4</span>
-          </div>
-          <input type="number" class="lg-team-score" id="lg-score-0" min="0" placeholder="0" inputmode="numeric"
-            onclick="event.stopPropagation(); lgSelectTeam(0)" oninput="lgScoreInput(0)">
-        </div>
-        <div class="lg-vs-pill">VS</div>
-        <div class="lg-team-card team-1" id="lg-tab-1" onclick="lgSelectTeam(1)">
-          <div class="lg-team-card-top">
-            <span class="lg-team-name">TEAM 2</span>
-            <span class="lg-team-count" id="lg-count-1">0 / 4</span>
-          </div>
-          <input type="number" class="lg-team-score" id="lg-score-1" min="0" placeholder="0" inputmode="numeric"
-            onclick="event.stopPropagation(); lgSelectTeam(1)" oninput="lgScoreInput(1)">
-        </div>
+      <div class="form-group">
+        <label for="tn-name">Tournament</label>
+        <input type="text" id="tn-name" maxlength="80" placeholder="BBL Tournament 3">
       </div>
-
-      <p class="lg-hint">Tap to assign to <span id="lg-active-label">Team 1</span> — tap again to remove, or tap someone on the other team to switch.</p>
-      <div id="lg-roster" class="lg-roster"></div>
-
-      <div class="lg-guest-row">
-        <input type="text" id="lg-guest-name" placeholder="Guest name..."
-          onkeypress="if(event.key==='Enter'){event.preventDefault();lgAddGuest();}">
-        <button type="button" class="btn btn-secondary" onclick="lgAddGuest()">+ ADD GUEST</button>
+      <div class="tn-places">
+        <button type="button" class="tn-place" id="tn-place-1" onclick="tnSelectPlace(1)">
+          <span class="tn-place-top"><b>1st</b><span id="tn-count-1">0 / 4</span></span>
+          <span class="tn-members" id="tn-members-1"></span>
+        </button>
+        <button type="button" class="tn-place" id="tn-place-2" onclick="tnSelectPlace(2)">
+          <span class="tn-place-top"><b>2nd</b><span id="tn-count-2">0 / 4</span></span>
+          <span class="tn-members" id="tn-members-2"></span>
+        </button>
+        <button type="button" class="tn-place" id="tn-place-3" onclick="tnSelectPlace(3)">
+          <span class="tn-place-top"><b>3rd</b><span id="tn-count-3">0 / 4</span></span>
+          <span class="tn-members" id="tn-members-3"></span>
+        </button>
       </div>
-
-      <div class="form-group lg-notes-group">
-        <label>Notes <span class="lg-optional">optional</span></label>
-        <input type="text" id="lg-notes" placeholder="Comeback of the century, wind was a factor, etc.">
+      <p class="tn-hint">Select a place, then tap whoever finished there. Tap again to remove them.</p>
+      <div id="tn-roster" class="tn-roster"></div>
+      <div class="tn-guest-row">
+        <input type="text" id="tn-guest-name" placeholder="Guest name..."
+          onkeypress="if(event.key==='Enter'){event.preventDefault();tnAddGuest();}">
+        <button type="button" class="btn btn-secondary" onclick="tnAddGuest()">+ Add Guest</button>
       </div>
-
-      <div id="lg-status" class="lg-status"></div>
-      <button type="button" id="lg-save-btn" class="btn btn-primary btn-full" onclick="submitGameResult()" disabled>
-        SAVE RESULT
-      </button>
+      <div id="tn-status" class="tn-status"></div>
+      <button type="button" id="tn-save-btn" class="btn btn-primary btn-full" onclick="saveTournament()">Save Results</button>
     </div>
   </div>
 
@@ -283,13 +276,11 @@
   <div id="admin-bar" class="admin-bar hidden">
     <div class="admin-inner">
       <div class="admin-indicator">ADMIN MODE ACTIVE</div>
-      <button class="btn btn-admin-action" onclick="resetAllStats()">Reset All Stats</button>
-      <button class="btn btn-admin-action" onclick="repairSnapshotsAfterReset()">Repair Snapshots</button>
       <button class="btn btn-admin-exit" onclick="exitAdminMode()">Exit Admin</button>
     </div>
   </div>
 
-  <script src="/static/app.js?v=8"></script>
+  <script src="/static/app.js?v=12"></script>
 </body>
 
 </html>

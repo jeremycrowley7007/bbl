@@ -1,11 +1,19 @@
 let players = [];
 let playerOrder = [];
-let currentTab = "standings";
+let currentTab = "open";
 let adminMode = false;
 let currentDetailReqId = null;
 let photoUploadPlayerId = null;
+let requestPage = 1;
+let pastPlayerFilter = "";
+let requestLoadToken = 0;
 
 let requestCache = {};
+
+const REQUESTS_PER_PAGE = 6;
+const TN_MAX_PER_PLACE = 4;
+
+let tournaments = [];
 
 function getCookie(name) {
   const m = document.cookie.match(new RegExp('(?:^|; )' + name + '=([^;]*)'));
@@ -210,6 +218,8 @@ async function loadPlayers() {
   players = await res.json();
   renderPlayerCards();
   populatePlayerSelect();
+  populatePastPlayerFilter();
+  if (currentTab === "trophies") renderTrophyRoom();
 }
 
 // The roster is dealt in a fresh random order on every visit so the same faces
@@ -293,27 +303,98 @@ function populatePlayerSelect() {
     players.map((p) => `<option value="${p.id}">${p.name}</option>`).join("");
 }
 
-async function loadRequests() {
-  const [openRes, closedRes] = await Promise.all([
-    fetch("/api/requests?status=open"),
-    fetch("/api/requests?status=closed"),
-  ]);
-  const openReqs = await openRes.json();
-  const closedReqs = await closedRes.json();
+function populatePastPlayerFilter() {
+  const select = document.getElementById("past-player-filter");
+  if (!select) return;
+  const options = players
+    .slice()
+    .sort((a, b) => a.name.localeCompare(b.name))
+    .map((p) => `<option value="${p.id}">${escapeHtml(p.name)}</option>`)
+    .join("");
+  select.innerHTML = `<option value="">All players</option>${options}`;
+  select.value = pastPlayerFilter;
+}
 
-  document.getElementById("open-count").textContent = openReqs.length;
-  document.getElementById("closed-count").textContent = closedReqs.length;
+async function loadRequests() {
+  const token = ++requestLoadToken;
+  const countsPromise = fetch("/api/requests/counts").then((res) => res.json());
+
+  if (currentTab === "trophies") {
+    const [counts, loaded] = await Promise.all([
+      countsPromise,
+      fetch("/api/tournaments").then((res) => res.json()),
+    ]);
+    if (token !== requestLoadToken) return;
+    updateRequestCounts(counts);
+    tournaments = loaded;
+    renderTrophyRoom();
+    return;
+  }
 
   if (currentTab !== "open" && currentTab !== "closed") return;
 
-  const reqs = currentTab === "open" ? openReqs : closedReqs;
+  const params = new URLSearchParams({
+    status: currentTab,
+    page: String(requestPage),
+    per_page: String(REQUESTS_PER_PAGE),
+  });
+  if (currentTab === "closed" && pastPlayerFilter) {
+    params.set("player_id", pastPlayerFilter);
+  }
+
+  const list = document.getElementById("requests-list");
+  list.classList.add("requests-loading");
+
+  const [counts, pageData] = await Promise.all([
+    countsPromise,
+    fetch(`/api/requests?${params}`).then((res) => res.json()),
+  ]);
+  if (token !== requestLoadToken) return;
+
+  updateRequestCounts(counts);
+  requestPage = pageData.page;
 
   const details = await Promise.all(
-    reqs.map((r) => fetch(`/api/requests/${r.id}`).then((res) => res.json()))
+    pageData.items.map((r) => fetch(`/api/requests/${r.id}`).then((res) => res.json()))
   );
-  details.forEach((d) => { requestCache[d.id] = d; });
+  if (token !== requestLoadToken) return;
 
+  details.forEach((d) => { requestCache[d.id] = d; });
   renderRequests(details);
+  renderRequestPagination(pageData);
+  list.classList.remove("requests-loading");
+}
+
+function updateRequestCounts(counts) {
+  document.getElementById("open-count").textContent = counts.open;
+  document.getElementById("closed-count").textContent = counts.closed;
+}
+
+function changePastPlayerFilter(playerId) {
+  pastPlayerFilter = playerId;
+  requestPage = 1;
+  loadRequests();
+}
+
+function goToRequestPage(page) {
+  requestPage = page;
+  loadRequests();
+  document.getElementById("league-section").scrollIntoView({ behavior: "smooth" });
+}
+
+function renderRequestPagination(pageData) {
+  const container = document.getElementById("request-pagination");
+  if (pageData.pages <= 1) {
+    container.innerHTML = "";
+    return;
+  }
+
+  container.innerHTML = `
+    <button type="button" class="page-btn" onclick="goToRequestPage(${pageData.page - 1})"
+      ${pageData.page <= 1 ? "disabled" : ""} aria-label="Previous page">&larr;</button>
+    <span>Page ${pageData.page} of ${pageData.pages}</span>
+    <button type="button" class="page-btn" onclick="goToRequestPage(${pageData.page + 1})"
+      ${pageData.page >= pageData.pages ? "disabled" : ""} aria-label="Next page">&rarr;</button>`;
 }
 
 function renderRequests(reqs) {
@@ -341,6 +422,310 @@ function renderRequests(reqs) {
   }
 
   container.innerHTML = reqs.map((r) => renderRequestCard(r)).join("");
+}
+
+const PLACE_META = {
+  1: { medal: "🏆", label: "Champion" },
+  2: { medal: "🥈", label: "Runner-up" },
+  3: { medal: "🥉", label: "Third Place" },
+};
+
+function renderTrophyRoom() {
+  const room = document.getElementById("trophy-room");
+  const cabinets = trophyCabinets();
+  const adminTools = adminMode
+    ? `<div class="trophy-admin">
+        <button type="button" class="btn btn-primary" onclick="openTournamentModal()">Add Tournament Results</button>
+        ${tournaments.length ? `<div class="trophy-admin-list">${tournaments.map((t) => `
+          <div class="trophy-admin-row">
+            <span>${escapeHtml(t.name)}</span>
+            <button type="button" class="btn btn-small btn-secondary" onclick="openTournamentModal(${t.id})">Edit</button>
+            <button type="button" class="btn btn-small btn-secondary trophy-delete" onclick="deleteTournament(${t.id})">Delete</button>
+          </div>`).join("")}</div>` : ""}
+      </div>`
+    : "";
+
+  room.innerHTML = `
+    <div class="trophy-intro">
+      <span class="trophy-intro-mark" aria-hidden="true">🏆</span>
+      <div>
+        <h3>Trophy Room</h3>
+        <p>Every tournament finish, kept with the player who earned it.</p>
+      </div>
+    </div>
+    ${adminTools}
+    ${cabinets.length
+      ? `<div class="trophy-case-grid">${cabinets.map(renderTrophyCabinet).join("")}</div>`
+      : `<div class="empty-state"><div class="emoji">🏆</div><p>No tournament results yet.</p></div>`}`;
+}
+
+function trophyCabinets() {
+  const byPerson = new Map();
+  tournaments.forEach((tournament) => {
+    [1, 2, 3].forEach((place) => {
+      const team = tournament.places[String(place)] || [];
+      team.forEach((person) => {
+        const key = person.player_id ? `p${person.player_id}` : `g${person.name.toLowerCase()}`;
+        if (!byPerson.has(key)) {
+          byPerson.set(key, {
+            key,
+            name: person.name,
+            playerId: person.player_id,
+            photoUrl: person.photo_url || "",
+            trophies: [],
+          });
+        }
+        const cabinet = byPerson.get(key);
+        cabinet.name = person.name;
+        if (person.photo_url) cabinet.photoUrl = person.photo_url;
+        cabinet.trophies.push({
+          place,
+          ...PLACE_META[place],
+          tournament: tournament.name,
+          partners: team.filter((mate) => mate.name !== person.name).map((mate) => mate.name),
+        });
+      });
+    });
+  });
+
+  const tally = (cabinet, place) => cabinet.trophies.filter((t) => t.place === place).length;
+  return [...byPerson.values()]
+    .map((cabinet) => {
+      cabinet.trophies.sort((a, b) => a.place - b.place || a.tournament.localeCompare(b.tournament));
+      return cabinet;
+    })
+    .sort(
+      (a, b) =>
+        tally(b, 1) - tally(a, 1) ||
+        tally(b, 2) - tally(a, 2) ||
+        tally(b, 3) - tally(a, 3) ||
+        a.name.localeCompare(b.name)
+    );
+}
+
+function renderTrophyCabinet(cabinet) {
+  const photo = cabinet.photoUrl
+    ? `<img src="${cabinet.photoUrl}" alt="${escapeHtml(cabinet.name)}">`
+    : `<span>${getInitials(cabinet.name)}</span>`;
+  const best = cabinet.trophies[0];
+  const bestCount = cabinet.trophies.filter((t) => t.place === best.place).length;
+  const headline = bestCount > 1 ? `${bestCount}× ${best.label}` : best.label;
+  const shelf = cabinet.trophies
+    .map((trophy) => `
+      <div class="trophy-item">
+        <span class="trophy-item-medal" aria-hidden="true">${trophy.medal}</span>
+        <div class="trophy-item-text">
+          <strong>${trophy.label}</strong>
+          <span>${escapeHtml(trophy.tournament)}${trophy.partners.length ? ` · w/ ${trophy.partners.map(escapeHtml).join(", ")}` : ""}</span>
+        </div>
+      </div>`)
+    .join("");
+
+  return `
+    <article class="trophy-case">
+      <div class="trophy-case-head">
+        <div class="trophy-case-photo">${photo}</div>
+        <div class="trophy-case-id">
+          <h4>${escapeHtml(cabinet.name)}</h4>
+          <span class="trophy-case-headline">${headline}</span>
+          <span class="trophy-case-count" aria-label="${cabinet.trophies.length} trophies">${cabinet.trophies.map((t) => t.medal).join("")}</span>
+        </div>
+      </div>
+      <div class="trophy-shelf">${shelf}</div>
+    </article>`;
+}
+
+let tnEditingId = null;
+let tnActivePlace = 1;
+let tnPlaces = { 1: [], 2: [], 3: [] };
+let tnGuestCounter = 0;
+
+function openTournamentModal(tournamentId) {
+  tnEditingId = tournamentId || null;
+  tnActivePlace = 1;
+  tnGuestCounter = 0;
+  tnPlaces = { 1: [], 2: [], 3: [] };
+
+  const tournament = tournaments.find((t) => t.id === tournamentId);
+  document.getElementById("tn-title").textContent = tournament ? "Edit Tournament" : "Add Tournament Results";
+  document.getElementById("tn-save-btn").textContent = tournament ? "Save Changes" : "Save Results";
+  document.getElementById("tn-name").value = tournament
+    ? tournament.name
+    : `BBL Tournament ${tournaments.length + 1}`;
+  document.getElementById("tn-guest-name").value = "";
+  document.getElementById("tn-status").textContent = "";
+
+  if (tournament) {
+    [1, 2, 3].forEach((place) => {
+      (tournament.places[String(place)] || []).forEach((person) => {
+        tnPlaces[place].push(person.player_id
+          ? { key: `p${person.player_id}`, player_id: person.player_id, name: person.name }
+          : { key: `g${++tnGuestCounter}`, player_id: null, name: person.name });
+      });
+    });
+  }
+
+  renderTournamentForm();
+  document.getElementById("tournament-modal").classList.add("visible");
+  document.getElementById("tn-name").focus();
+}
+
+function closeTournamentModal() {
+  document.getElementById("tournament-modal").classList.remove("visible");
+}
+
+function tnSelectPlace(place) {
+  tnActivePlace = place;
+  renderTournamentForm();
+}
+
+function tnAssignedPlace(key) {
+  return [1, 2, 3].find((place) => tnPlaces[place].some((person) => person.key === key)) || 0;
+}
+
+function tnToggle(key) {
+  const assigned = tnAssignedPlace(key);
+  if (assigned === tnActivePlace) {
+    tnPlaces[assigned] = tnPlaces[assigned].filter((person) => person.key !== key);
+  } else if (assigned) {
+    tnActivePlace = assigned;
+  } else if (tnPlaces[tnActivePlace].length >= TN_MAX_PER_PLACE) {
+    tnSetStatus(`${PLACE_META[tnActivePlace].label} already has ${TN_MAX_PER_PLACE} players.`);
+    return;
+  } else {
+    const player = players.find((p) => `p${p.id}` === key);
+    if (player) tnPlaces[tnActivePlace].push({ key, player_id: player.id, name: player.name });
+  }
+  renderTournamentForm();
+}
+
+function tnAddGuest() {
+  const input = document.getElementById("tn-guest-name");
+  const name = input.value.trim();
+  if (!name) return;
+  const rosterMatch = players.find((p) => p.name.toLowerCase() === name.toLowerCase());
+  if (rosterMatch) {
+    const key = `p${rosterMatch.id}`;
+    if (tnAssignedPlace(key)) tnActivePlace = tnAssignedPlace(key);
+    else tnToggle(key);
+    input.value = "";
+    renderTournamentForm();
+    return;
+  }
+  if ([1, 2, 3].some((place) => tnPlaces[place].some((person) => person.name.toLowerCase() === name.toLowerCase()))) {
+    tnSetStatus(`${name} is already on the podium.`);
+    return;
+  }
+  if (tnPlaces[tnActivePlace].length >= TN_MAX_PER_PLACE) {
+    tnSetStatus(`${PLACE_META[tnActivePlace].label} already has ${TN_MAX_PER_PLACE} players.`);
+    return;
+  }
+  tnGuestCounter += 1;
+  tnPlaces[tnActivePlace].push({ key: `g${tnGuestCounter}`, player_id: null, name });
+  input.value = "";
+  renderTournamentForm();
+}
+
+function tnRemove(key) {
+  [1, 2, 3].forEach((place) => {
+    tnPlaces[place] = tnPlaces[place].filter((person) => person.key !== key);
+  });
+  renderTournamentForm();
+}
+
+function tnSetStatus(message, ok) {
+  const status = document.getElementById("tn-status");
+  status.textContent = message;
+  status.classList.toggle("valid", !!ok);
+}
+
+function renderTournamentForm() {
+  [1, 2, 3].forEach((place) => {
+    const card = document.getElementById(`tn-place-${place}`);
+    card.classList.toggle("active", place === tnActivePlace);
+    document.getElementById(`tn-count-${place}`).textContent =
+      `${tnPlaces[place].length} / ${TN_MAX_PER_PLACE}`;
+    document.getElementById(`tn-members-${place}`).innerHTML = tnPlaces[place].length
+      ? tnPlaces[place].map((person) => `
+          <span class="tn-member">${escapeHtml(person.name)}
+            <button type="button" onclick="event.stopPropagation(); tnRemove('${person.key}')" aria-label="Remove ${escapeHtml(person.name)}">&times;</button>
+          </span>`).join("")
+      : `<span class="tn-empty">Tap players below</span>`;
+  });
+
+  const assigned = new Set([1, 2, 3].flatMap((place) => tnPlaces[place].map((person) => person.key)));
+  document.getElementById("tn-roster").innerHTML = players.map((player) => {
+    const key = `p${player.id}`;
+    const place = tnAssignedPlace(key);
+    return `
+      <button type="button" class="tn-chip ${place ? "assigned" : ""}" onclick="tnToggle('${key}')">
+        <span>${escapeHtml(player.name)}</span>
+        ${place ? `<b>${place}</b>` : ""}
+      </button>`;
+  }).join("") + [...assigned].filter((key) => key.startsWith("g")).map((key) => {
+    const person = [1, 2, 3].flatMap((place) => tnPlaces[place]).find((entry) => entry.key === key);
+    const place = tnAssignedPlace(key);
+    return `
+      <button type="button" class="tn-chip assigned guest" onclick="tnRemove('${key}')">
+        <span>${escapeHtml(person.name)}</span>
+        <b>${place}</b>
+      </button>`;
+  }).join("");
+
+  tnSetStatus(tnPlaces[1].length ? "" : "First place needs at least one player.");
+}
+
+async function saveTournament() {
+  const name = document.getElementById("tn-name").value.trim();
+  if (!name) {
+    tnSetStatus("Give the tournament a name.");
+    return;
+  }
+  if (!tnPlaces[1].length) {
+    tnSetStatus("First place needs at least one player.");
+    return;
+  }
+
+  const places = {};
+  [1, 2, 3].forEach((place) => {
+    places[place] = tnPlaces[place].map((person) => (
+      person.player_id ? { player_id: person.player_id } : { guest_name: person.name }
+    ));
+  });
+
+  const btn = document.getElementById("tn-save-btn");
+  btn.disabled = true;
+  const res = await fetch(tnEditingId ? `/api/tournaments/${tnEditingId}` : "/api/tournaments", {
+    method: tnEditingId ? "PUT" : "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ admin_key: adminKey, name, places }),
+  });
+  const data = await res.json();
+  btn.disabled = false;
+  if (data.error) {
+    tnSetStatus(data.error);
+    return;
+  }
+  closeTournamentModal();
+  if (currentTab !== "trophies") switchTab("trophies");
+  else loadRequests();
+}
+
+async function deleteTournament(tournamentId) {
+  const tournament = tournaments.find((t) => t.id === tournamentId);
+  if (!tournament) return;
+  if (!confirm(`Delete ${tournament.name}? The trophies from it come off every card.`)) return;
+  const res = await fetch(`/api/tournaments/${tournamentId}`, {
+    method: "DELETE",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ admin_key: adminKey }),
+  });
+  const data = await res.json();
+  if (data.error) {
+    alert(data.error);
+    return;
+  }
+  loadRequests();
 }
 
 function renderRequestCard(r) {
@@ -531,7 +916,7 @@ function openCardZoom(playerId) {
         </div>
       </div>
       <div class="card-zoom-details">
-        ${renderRecordStrip(p)}
+        ${renderCapabilityChart(p)}
         ${statDescHtml}
       </div>
     </div>`;
@@ -539,24 +924,98 @@ function openCardZoom(playerId) {
   overlay.classList.add("visible");
 }
 
-function renderRecordStrip(p) {
-  const rec = p.record || { wins: 0, losses: 0, games_played: 0, point_diff: 0 };
-  if (!rec.games_played) {
-    return `
-      <div class="zoom-record empty">
-        <span class="zoom-record-label">LIFETIME</span>
-        <span class="zoom-record-none">No games logged yet</span>
-      </div>`;
+// Six-axis capability chart. The ring is this player's own average, so a
+// round shape is an even game and a spike or dent is a real lean. Absolute
+// ratings stay on the labels; the shape is only about balance.
+function renderCapabilityChart(p) {
+  const keys = STAT_KEYS;
+  const n = keys.length;
+  const cx = 180;
+  const cy = 152;
+  const evenR = 72;
+  const pxPerPoint = 5.5;
+  const spokeR = 112;
+
+  const values = keys.map((key) => p[key]);
+  const mean = values.reduce((sum, val) => sum + val, 0) / n;
+
+  const pointAt = (i, radius) => {
+    const angle = -Math.PI / 2 + (i * 2 * Math.PI) / n;
+    return [cx + radius * Math.cos(angle), cy + radius * Math.sin(angle)];
+  };
+
+  const radiusFor = (val) => {
+    const raw = evenR + (val - mean) * pxPerPoint;
+    return Math.max(20, Math.min(spokeR, raw));
+  };
+
+  const ring = (radius, cls) =>
+    `<circle cx="${cx}" cy="${cy}" r="${radius}" class="${cls}" />`;
+
+  const spokes = keys
+    .map((_, i) => {
+      const [x, y] = pointAt(i, spokeR);
+      return `<line x1="${cx}" y1="${cy}" x2="${x.toFixed(1)}" y2="${y.toFixed(1)}" class="cap-spoke" />`;
+    })
+    .join("");
+
+  const poly = keys
+    .map((key, i) => pointAt(i, radiusFor(p[key])).map((n) => n.toFixed(1)).join(","))
+    .join(" ");
+
+  const peak = Math.max(...values);
+  const dots = keys
+    .map((key, i) => {
+      const [x, y] = pointAt(i, radiusFor(p[key]));
+      const hot = p[key] === peak && peak - mean >= 3.5;
+      return `<circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="${hot ? 5 : 3.5}" class="cap-dot${hot ? " cap-dot-peak" : ""}" />`;
+    })
+    .join("");
+
+  const labels = keys
+    .map((key, i) => {
+      const angle = -Math.PI / 2 + (i * 2 * Math.PI) / n;
+      const labelR = spokeR + 16;
+      const x = cx + labelR * Math.cos(angle);
+      const y = cy + labelR * Math.sin(angle);
+      const cos = Math.cos(angle);
+      const sin = Math.sin(angle);
+      const anchor = cos > 0.4 ? "start" : cos < -0.4 ? "end" : "middle";
+      const dy = sin > 0.5 ? 12 : sin < -0.5 ? -4 : 4;
+      return `<text x="${x.toFixed(1)}" y="${(y + dy).toFixed(1)}" text-anchor="${anchor}" class="cap-label"><tspan class="cap-abbr">${STAT_NAMES[key]}</tspan> <tspan class="cap-num">${p[key]}</tspan></text>`;
+    })
+    .join("");
+
+  const ranked = keys
+    .map((key) => ({ key, delta: p[key] - mean }))
+    .sort((a, b) => b.delta - a.delta);
+  const high = ranked[0];
+  const low = ranked[ranked.length - 1];
+  const highLean = high.delta >= 3.5;
+  const lowLean = low.delta <= -3.5;
+  let lean = "Even across the board";
+  if (highLean && lowLean) {
+    lean = `Leans ${STAT_FULL[high.key]} · light on ${STAT_FULL[low.key]}`;
+  } else if (highLean) {
+    lean = `Leans ${STAT_FULL[high.key]}`;
+  } else if (lowLean) {
+    lean = `Light on ${STAT_FULL[low.key]}`;
   }
-  const pct = formatPct(rec.wins / rec.games_played);
-  const diff = formatDiff(rec.point_diff);
+
   return `
-    <div class="zoom-record">
-      <span class="zoom-record-label">LIFETIME</span>
-      <span class="zoom-record-wl">${rec.wins}<span class="zoom-record-sep">–</span>${rec.losses}</span>
-      <span class="zoom-record-meta">${pct} win rate · ${diff} pt diff · ${rec.games_played} game${
-        rec.games_played === 1 ? "" : "s"
-      }</span>
+    <div class="cap-chart">
+      <div class="cap-chart-title">Capabilities</div>
+      <svg viewBox="0 0 360 312" class="cap-svg" role="img" aria-label="Capability chart">
+        ${ring(evenR - 5 * pxPerPoint, "cap-guide")}
+        ${ring(evenR + 5 * pxPerPoint, "cap-guide")}
+        ${ring(evenR, "cap-even")}
+        ${spokes}
+        <polygon points="${poly}" class="cap-shape" />
+        ${dots}
+        ${labels}
+      </svg>
+      <p class="cap-lean">${lean}</p>
+      <p class="cap-scale-note">Ring is this player's average. A spike is a strength.</p>
     </div>`;
 }
 
@@ -1007,11 +1466,6 @@ function closeModal(event) {
 
 // --- Tabs ---
 
-function leagueLogResult() {
-  if (currentTab !== "standings" && currentTab !== "log") switchTab("log");
-  openLogGameModal();
-}
-
 function leagueNewPlayer() {
   if (currentTab !== "open") switchTab("open");
   openNewPlayerModal();
@@ -1023,20 +1477,18 @@ function leagueStatChange() {
 }
 
 function switchTab(tab) {
+  if (tab !== currentTab) requestPage = 1;
   currentTab = tab;
   document.querySelectorAll("#league-section .league-tab").forEach((t) => {
     t.classList.toggle("active", t.dataset.tab === tab);
   });
 
-  const isGames = tab === "standings" || tab === "log";
-  document.getElementById("games-body").classList.toggle("league-panel-hidden", !isGames);
-  document.getElementById("requests-list").classList.toggle("league-panel-hidden", isGames);
+  const isTrophies = tab === "trophies";
+  document.getElementById("requests-panel").classList.toggle("league-panel-hidden", isTrophies);
+  document.getElementById("trophy-room").classList.toggle("league-panel-hidden", !isTrophies);
+  document.getElementById("past-request-tools").classList.toggle("league-panel-hidden", tab !== "closed");
 
-  if (isGames) {
-    renderGamesBody();
-  } else {
-    loadRequests();
-  }
+  loadRequests();
 }
 
 // --- Admin ---
@@ -1084,7 +1536,6 @@ async function attemptAdminLogin() {
     btn.textContent = "Admin ON";
     btn.classList.add("admin-on");
     renderPlayerCards();
-    renderGamesBody();
     loadRequests();
     if (currentDetailReqId) {
       openDetailModal(currentDetailReqId);
@@ -1108,76 +1559,7 @@ function exitAdminMode() {
   btn.textContent = "Admin";
   btn.classList.remove("admin-on");
   renderPlayerCards();
-  renderGamesBody();
   loadRequests();
-  if (currentDetailReqId) {
-    openDetailModal(currentDetailReqId);
-  }
-}
-
-// --- Admin Reset All Stats ---
-
-async function resetAllStats() {
-  const input = prompt("Reset ALL players to what baseline? (1–99)", "62");
-  if (input === null) return;
-  const baseline = parseInt(input);
-  if (isNaN(baseline) || baseline < 1 || baseline > 99) {
-    alert("Enter a number between 1 and 99.");
-    return;
-  }
-  if (!confirm(`This will set every stat for every player to ${baseline}. Are you sure?`)) return;
-
-  const res = await fetch("/api/admin/reset-stats", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ admin_key: adminKey, baseline }),
-  });
-  const data = await res.json();
-  if (data.error) {
-    alert(data.error);
-    return;
-  }
-  await loadPlayers();
-}
-
-async function repairSnapshotsAfterReset() {
-  const resetAt = prompt(
-    "When did you reset everyone to 62?\nFormat: YYYY-MM-DD HH:MM:SS\n(e.g. 2026-04-08 12:00:00)",
-    ""
-  );
-  if (resetAt === null || !resetAt.trim()) return;
-
-  const baselineInput = prompt("Baseline everyone was reset to?", "62");
-  if (baselineInput === null) return;
-  const baseline = parseInt(baselineInput);
-  if (isNaN(baseline) || baseline < 1 || baseline > 99) {
-    alert("Enter a number between 1 and 99.");
-    return;
-  }
-
-  if (!confirm(
-    `Rebuild request snapshots using a league reset at ${resetAt.trim()} → ${baseline}?`
-  )) return;
-
-  const res = await fetch("/api/admin/repair-snapshots", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      admin_key: adminKey,
-      reset_at: resetAt.trim(),
-      baseline,
-    }),
-  });
-  const data = await res.json();
-  if (data.error) {
-    alert(data.error);
-    return;
-  }
-  alert(
-    `Repair complete.\nReset recorded: ${data.reset_added ? "yes" : "already on file"}\n` +
-    `Requests rebuilt: ${data.requests_cleared}`
-  );
-  await loadRequests();
   if (currentDetailReqId) {
     openDetailModal(currentDetailReqId);
   }
@@ -1328,9 +1710,7 @@ async function approveNewPlayer(reqId) {
 
 document.addEventListener("DOMContentLoaded", () => {
   loadPlayers();
-  loadRequests();
-  loadGames();
-  switchTab("standings");
+  switchTab("open");
 });
 
 document.addEventListener("keydown", (e) => {
@@ -1346,477 +1726,6 @@ document.addEventListener("keydown", (e) => {
     }
   }
 });
-
-// =====================================================================
-// GAME RESULTS — standings, game log, and the log-a-result form
-// =====================================================================
-
-const LG_MAX_PER_TEAM = 4;
-const LG_TEAM_LABELS = ["TEAM 1", "TEAM 2"];
-
-let games = [];
-let standings = [];
-
-// One form, two teams. Team 1 is active by default; click a team tab to
-// switch where roster taps and the score field apply.
-let lgEditingId = null;
-let lgActiveTeam = 0;
-let lgTeams = [];
-let lgGuests = [];
-let lgGuestCounter = 0;
-
-function formatGameDate(playedAt) {
-  // played_at is stored as naive local time exactly as it was entered, so it is
-  // parsed piecewise rather than through Date(string), which would assume UTC.
-  const [datePart, timePart = "00:00"] = playedAt.split(" ");
-  const [y, m, d] = datePart.split("-").map(Number);
-  const [hh, mm] = timePart.split(":").map(Number);
-  const dt = new Date(y, m - 1, d, hh, mm);
-
-  const dateStr = dt.toLocaleDateString(undefined, {
-    month: "short",
-    day: "numeric",
-    year: dt.getFullYear() === new Date().getFullYear() ? undefined : "numeric",
-  });
-  if (!hh && !mm) return dateStr;
-  return `${dateStr} · ${dt.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })}`;
-}
-
-function formatPct(pct) {
-  if (pct === null || pct === undefined) return "—";
-  return pct.toFixed(3).replace(/^0/, "");
-}
-
-function formatDiff(diff) {
-  if (!diff) return "0";
-  return diff > 0 ? `+${diff}` : String(diff);
-}
-
-// --- Loading + tabs ---
-
-async function loadGames() {
-  const [recordsRes, gamesRes] = await Promise.all([
-    fetch("/api/records"),
-    fetch("/api/games"),
-  ]);
-  standings = await recordsRes.json();
-  games = await gamesRes.json();
-
-  document.getElementById("games-count").textContent = games.length;
-  if (currentTab === "standings" || currentTab === "log") {
-    renderGamesBody();
-  }
-}
-
-function renderGamesBody() {
-  const body = document.getElementById("games-body");
-  if (!body) return;
-  body.innerHTML = currentTab === "standings" ? renderStandings() : renderGameLog();
-}
-
-function renderStandings() {
-  if (!standings.some((s) => s.games_played > 0)) {
-    return `
-      <div class="empty-state">
-        <div class="emoji">🏆</div>
-        <p>No games logged yet. Log a result and the standings build themselves.</p>
-      </div>`;
-  }
-
-  const rows = standings
-    .map((s, i) => {
-      const played = s.games_played;
-      const rank = played ? i + 1 : "—";
-      const diff = formatDiff(s.point_diff);
-      const diffCls = s.point_diff > 0 ? "up" : s.point_diff < 0 ? "down" : "";
-      return `
-      <tr class="${played ? "" : "st-inactive"}">
-        <td class="st-rank">${rank}</td>
-        <td class="st-player">
-          <span class="st-avatar">${
-            s.photo_url
-              ? `<img src="${s.photo_url}" alt="${escapeHtml(s.name)}">`
-              : getInitials(s.name)
-          }</span>
-          ${escapeHtml(s.name)}
-        </td>
-        <td class="st-w">${s.wins}</td>
-        <td class="st-l">${s.losses}</td>
-        <td class="st-pct">${formatPct(s.win_pct)}</td>
-        <td class="st-diff ${diffCls}">${played ? diff : "—"}</td>
-      </tr>`;
-    })
-    .join("");
-
-  return `
-    <table class="standings">
-      <thead>
-        <tr>
-          <th class="st-rank">#</th>
-          <th class="st-player">Player</th>
-          <th class="st-w">W</th>
-          <th class="st-l">L</th>
-          <th class="st-pct" title="Win percentage">PCT</th>
-          <th class="st-diff" title="Total point differential">pt diff</th>
-        </tr>
-      </thead>
-      <tbody>${rows}</tbody>
-    </table>`;
-}
-
-function renderGameLog() {
-  if (games.length === 0) {
-    return `
-      <div class="empty-state">
-        <div class="emoji">📋</div>
-        <p>No games logged yet.</p>
-      </div>`;
-  }
-  return `<div class="game-log">${games.map(renderGameCard).join("")}</div>`;
-}
-
-function renderGameCard(g) {
-  const sides = g.teams
-    .map((t) => {
-      const names = t.players
-        .map((m) => {
-          const label = escapeHtml(m.name);
-          return m.is_guest ? `${label}<sup class="gc-guest-mark">g</sup>` : label;
-        })
-        .join(", ");
-      return `
-      <span class="gc-side gc-team-${t.team_index} ${t.won ? "won" : "lost"}">
-        <span class="gc-score">${t.score}</span>
-        <span class="gc-names">${names || "—"}</span>
-      </span>`;
-    })
-    .join('<span class="gc-vs">vs</span>');
-
-  const editBtn =
-    g.teams.length === 2
-      ? `<button class="btn btn-small btn-secondary" onclick="openLogGameModal(${g.id})">Edit</button>`
-      : `<span class="gc-admin-note">${g.teams.length} teams</span>`;
-
-  const adminHtml = adminMode
-    ? `<div class="gc-actions">
-        ${editBtn}
-        <button class="btn btn-small btn-secondary gc-delete" onclick="deleteGame(${g.id})">Del</button>
-      </div>`
-    : "";
-
-  return `
-  <div class="gc-card">
-    <div class="gc-row">
-      <span class="gc-date">${formatGameDate(g.played_at)}</span>
-      ${g.location ? `<span class="gc-location">${escapeHtml(g.location)}</span>` : ""}
-      <div class="gc-result">${sides}</div>
-      ${adminHtml}
-    </div>
-    ${g.notes ? `<div class="gc-notes">${escapeHtml(g.notes)}</div>` : ""}
-  </div>`;
-}
-
-// --- Log a result ---
-
-function lgLocalNow() {
-  const d = new Date();
-  const pad = (n) => String(n).padStart(2, "0");
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
-}
-
-function openLogGameModal(gameId) {
-  lgEditingId = null;
-  lgActiveTeam = 0;
-  lgTeams = [
-    { members: [], score: "" },
-    { members: [], score: "" },
-  ];
-  lgGuests = [];
-  lgGuestCounter = 0;
-
-  const game = gameId ? games.find((g) => g.id === gameId) : null;
-
-  if (game) {
-    lgEditingId = game.id;
-    game.teams.slice(0, 2).forEach((t, i) => {
-      lgTeams[i].score = String(t.score);
-      t.players.forEach((m) => {
-        if (m.is_guest) {
-          lgGuestCounter += 1;
-          const key = `g${lgGuestCounter}`;
-          lgGuests.push({ key, name: m.name });
-          lgTeams[i].members.push(key);
-        } else {
-          lgTeams[i].members.push(`p${m.player_id}`);
-        }
-      });
-    });
-  }
-
-  document.getElementById("lg-notes").value = game ? game.notes || "" : "";
-  document.getElementById("lg-title").textContent = game ? "Edit Game Result" : "Log Game Result";
-  document.getElementById("lg-save-btn").textContent = game ? "SAVE CHANGES" : "SAVE RESULT";
-  document.getElementById("lg-guest-name").value = "";
-
-  lgRender();
-  document.getElementById("log-game-modal").classList.add("visible");
-}
-
-function closeLogGameModal() {
-  document.getElementById("log-game-modal").classList.remove("visible");
-}
-
-function lgMemberInfo(key) {
-  if (key.startsWith("g")) {
-    const guest = lgGuests.find((g) => g.key === key);
-    return guest ? { key, name: guest.name, player_id: null, is_guest: true } : null;
-  }
-  const player = players.find((p) => `p${p.id}` === key);
-  return player
-    ? { key, name: player.name, player_id: player.id, is_guest: false, photo_url: player.photo_url }
-    : null;
-}
-
-function lgTeamOf(key) {
-  return lgTeams.findIndex((t) => t.members.includes(key));
-}
-
-function lgPersistScores() {
-  [0, 1].forEach((i) => {
-    const el = document.getElementById(`lg-score-${i}`);
-    if (el) lgTeams[i].score = el.value.trim();
-  });
-}
-
-function lgSelectTeam(i) {
-  lgPersistScores();
-  if (i === lgActiveTeam) return;
-  lgActiveTeam = i;
-  lgRender();
-  document.getElementById(`lg-score-${i}`).focus();
-}
-
-function lgScoreInput(i) {
-  lgActiveTeam = i;
-  lgTeams[i].score = document.getElementById(`lg-score-${i}`).value.trim();
-  [0, 1].forEach((j) => {
-    document.getElementById(`lg-tab-${j}`).classList.toggle("active", j === lgActiveTeam);
-  });
-  document.getElementById("lg-active-label").textContent = LG_TEAM_LABELS[i].replace("TEAM ", "Team ");
-  lgRenderStatus();
-}
-
-// Tapping someone on the active team removes them. Tapping someone on the
-// other team switches to that team instead of reshuffling chip styles. The
-// team pill stays put either way, so switching teams never janks the roster.
-function lgToggle(key) {
-  lgPersistScores();
-  const assigned = lgTeamOf(key);
-
-  if (assigned === lgActiveTeam) {
-    const idx = lgTeams[assigned].members.indexOf(key);
-    if (idx >= 0) lgTeams[assigned].members.splice(idx, 1);
-  } else if (assigned >= 0) {
-    lgActiveTeam = assigned;
-    lgRender();
-    return;
-  } else if (lgTeams[lgActiveTeam].members.length >= LG_MAX_PER_TEAM) {
-    lgFlashStatus(`${LG_TEAM_LABELS[lgActiveTeam]} already has ${LG_MAX_PER_TEAM} players.`);
-    return;
-  } else {
-    lgTeams[lgActiveTeam].members.push(key);
-  }
-  lgRender();
-}
-
-function lgAddGuest() {
-  const input = document.getElementById("lg-guest-name");
-  const name = input.value.trim();
-  if (!name) return;
-
-  const team = lgTeams[lgActiveTeam];
-  if (team.members.length >= LG_MAX_PER_TEAM) {
-    lgFlashStatus(`This team already has ${LG_MAX_PER_TEAM} players.`);
-    return;
-  }
-
-  lgGuestCounter += 1;
-  const key = `g${lgGuestCounter}`;
-  lgGuests.push({ key, name });
-  team.members.push(key);
-
-  input.value = "";
-  lgRender();
-  input.focus();
-}
-
-function lgRemoveGuest(key) {
-  lgGuests = lgGuests.filter((g) => g.key !== key);
-  lgTeams.forEach((t) => {
-    const idx = t.members.indexOf(key);
-    if (idx >= 0) t.members.splice(idx, 1);
-  });
-  lgRender();
-}
-
-function lgRender() {
-  document.getElementById("lg-active-label").textContent =
-    LG_TEAM_LABELS[lgActiveTeam].replace("TEAM ", "Team ");
-
-  [0, 1].forEach((i) => {
-    const el = document.getElementById(`lg-score-${i}`);
-    if (document.activeElement !== el) el.value = lgTeams[i].score;
-    document.getElementById(`lg-count-${i}`).textContent =
-      `${lgTeams[i].members.length} / ${LG_MAX_PER_TEAM}`;
-    document.getElementById(`lg-tab-${i}`).classList.toggle("active", i === lgActiveTeam);
-  });
-
-  lgRenderRoster();
-  lgRenderStatus();
-}
-
-function lgRenderRoster() {
-  const entries = [
-    ...players.map((p) => `p${p.id}`),
-    ...lgGuests.map((g) => g.key),
-  ]
-    .map(lgMemberInfo)
-    .filter(Boolean);
-
-  document.getElementById("lg-roster").innerHTML = entries
-    .map((e) => {
-      const assigned = lgTeamOf(e.key);
-      const editing = assigned === lgActiveTeam;
-
-      const avatar = e.photo_url
-        ? `<img src="${e.photo_url}" alt="${escapeHtml(e.name)}">`
-        : `<span class="lg-chip-initials">${getInitials(e.name)}</span>`;
-      const removeBtn = e.is_guest
-        ? `<span class="lg-chip-remove" onclick="event.stopPropagation(); lgRemoveGuest('${e.key}')" title="Remove guest">&times;</span>`
-        : "";
-      const teamPill =
-        assigned >= 0
-          ? `<span class="lg-chip-team t${assigned + 1}">T${assigned + 1}</span>`
-          : "";
-
-      return `
-      <div class="lg-chip ${assigned >= 0 ? `team-${assigned}` : ""} ${editing ? "editing" : ""}"
-           onclick="lgToggle('${e.key}')">
-        <span class="lg-chip-avatar">${avatar}</span>
-        <span class="lg-chip-name">${escapeHtml(e.name)}</span>
-        ${teamPill}
-        ${e.is_guest ? '<span class="lg-chip-guest">guest</span>' : ""}
-        ${removeBtn}
-      </div>`;
-    })
-    .join("");
-}
-
-function lgValidateForm() {
-  lgPersistScores();
-
-  for (let i = 0; i < 2; i++) {
-    if (!lgTeams[i].members.length) {
-      return { ok: false, message: `${LG_TEAM_LABELS[i]} needs at least one player.` };
-    }
-    if (lgTeams[i].score === "") {
-      return { ok: false, message: `Enter a score for ${LG_TEAM_LABELS[i]}.` };
-    }
-    const score = Number(lgTeams[i].score);
-    if (!Number.isInteger(score) || score < 0) {
-      return { ok: false, message: "Scores have to be whole numbers, zero or higher." };
-    }
-  }
-
-  const s0 = Number(lgTeams[0].score);
-  const s1 = Number(lgTeams[1].score);
-  if (s0 === s1) return { ok: false, message: "No ties — someone has to win." };
-
-  const winner = s0 > s1 ? 0 : 1;
-  return {
-    ok: true,
-    message: `${LG_TEAM_LABELS[winner]} wins ${Math.max(s0, s1)}–${Math.min(s0, s1)}`,
-  };
-}
-
-function lgFlashStatus(message) {
-  const status = document.getElementById("lg-status");
-  status.textContent = message;
-  status.classList.remove("valid");
-}
-
-function lgRenderStatus() {
-  lgPersistScores();
-
-  const state = lgValidateForm();
-  const status = document.getElementById("lg-status");
-  status.textContent = state.message;
-  status.classList.toggle("valid", state.ok);
-  document.getElementById("lg-save-btn").disabled = !state.ok;
-}
-
-async function submitGameResult() {
-  if (!lgValidateForm().ok) return;
-
-  const editing = lgEditingId !== null;
-
-  const body = {
-    notes: document.getElementById("lg-notes").value.trim(),
-    teams: lgTeams.map((t) => {
-      const members = t.members.map(lgMemberInfo).filter(Boolean);
-      return {
-        score: Number(t.score),
-        player_ids: members.filter((m) => !m.is_guest).map((m) => m.player_id),
-        guests: members.filter((m) => m.is_guest).map((m) => m.name),
-      };
-    }),
-  };
-
-  if (editing) {
-    body.admin_key = adminKey;
-  } else {
-    body.played_at = lgLocalNow();
-  }
-
-  const btn = document.getElementById("lg-save-btn");
-  btn.disabled = true;
-
-  const res = await fetch(editing ? `/api/games/${lgEditingId}` : "/api/games", {
-    method: editing ? "PUT" : "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
-  });
-  const data = await res.json();
-
-  if (data.error) {
-    const status = document.getElementById("lg-status");
-    status.textContent = data.error;
-    status.classList.remove("valid");
-    btn.disabled = false;
-    return;
-  }
-
-  closeLogGameModal();
-  switchTab("log");
-  await Promise.all([loadGames(), loadPlayers()]);
-}
-
-async function deleteGame(gameId) {
-  if (!confirm("Delete this game? Every record built from it will be recalculated.")) return;
-
-  const res = await fetch(`/api/games/${gameId}`, {
-    method: "DELETE",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ admin_key: adminKey }),
-  });
-  const data = await res.json();
-  if (data.error) {
-    alert(data.error);
-    return;
-  }
-
-  await Promise.all([loadGames(), loadPlayers()]);
-}
 
 // =====================================================================
 // GAME DAY — Team Picker

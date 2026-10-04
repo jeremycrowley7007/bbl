@@ -33,25 +33,6 @@ with sync_playwright() as p:
     print("  01-hero.png")
 
     scroll_to_league(page)
-    page.evaluate("switchTab('standings')")
-    page.wait_for_timeout(400)
-    page.locator("#league-section").screenshot(path=str(OUT / "02-player-standings.png"))
-    print("  02-player-standings.png")
-
-    page.evaluate("switchTab('log')")
-    page.wait_for_timeout(400)
-    page.locator("#league-section").screenshot(path=str(OUT / "03-game-log.png"))
-    print("  03-game-log.png")
-
-    page.evaluate("openLogGameModal()")
-    page.wait_for_timeout(500)
-    page.locator("#log-game-modal .modal-content").screenshot(
-        path=str(OUT / "04-log-game-modal.png")
-    )
-    print("  04-log-game-modal.png")
-
-    page.evaluate("closeLogGameModal()")
-    scroll_to_league(page)
     page.evaluate("switchTab('open')")
     page.wait_for_timeout(500)
     page.locator("#league-section").screenshot(path=str(OUT / "05-league-open-requests.png"))

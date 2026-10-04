@@ -11,7 +11,7 @@ from werkzeug.utils import secure_filename
 DATA_DIR = os.environ.get("DATA_DIR", os.path.dirname(os.path.abspath(__file__)))
 DATABASE = os.path.join(DATA_DIR, "bocce.db")
 PHOTO_DIR = os.path.join(DATA_DIR, "photos")
-ADMIN_KEY = os.environ.get("ADMIN_KEY", "bocce-admin-2024")
+ADMIN_KEY = os.environ.get("ADMIN_KEY", "bocce-2026")
 ALLOWED_EXTENSIONS = {"jpg", "jpeg", "png", "gif", "webp"}
 
 STAT_FIELDS = ["placement", "bowling", "tilt_aversion", "wall_ball", "substance_use", "flair"]
@@ -155,6 +155,23 @@ def init_db():
         CREATE INDEX IF NOT EXISTS idx_gtp_player ON game_team_players(player_id);
         CREATE INDEX IF NOT EXISTS idx_gtp_team ON game_team_players(game_team_id);
 
+        CREATE TABLE IF NOT EXISTS tournaments (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL UNIQUE,
+            created_at TEXT DEFAULT (datetime('now'))
+        );
+        CREATE TABLE IF NOT EXISTS tournament_results (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            tournament_id INTEGER NOT NULL,
+            place INTEGER NOT NULL CHECK (place BETWEEN 1 AND 3),
+            player_id INTEGER,
+            name TEXT NOT NULL,
+            FOREIGN KEY (tournament_id) REFERENCES tournaments(id) ON DELETE CASCADE,
+            FOREIGN KEY (player_id) REFERENCES players(id) ON DELETE SET NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_tournament_results_tournament
+            ON tournament_results(tournament_id, place);
+
         -- Win/loss is never stored, only derived: a team won if it outscored the
         -- best of the teams it was up against. Ties are rejected when a game is
         -- logged, so a tie in the data (a hand-edited row) counts for nobody
@@ -236,6 +253,8 @@ def init_db():
     if LEAGUE_RESET_AT:
         ensure_reset_in_history(db, LEAGUE_RESET_AT, LEAGUE_BASELINE)
 
+    _seed_tournaments(db)
+
     db.commit()
     db.close()
 
@@ -281,6 +300,43 @@ def _backfill_stat_history(db):
                     (
                         p["id"], f, a["bv"], a["pv"], "request_approved",
                         a["id"], a["requested_by"], a["closed_at"],
+                    ),
+                )
+
+
+# Seeded only when the trophy room is empty, so production keeps anything
+# an admin logs after the first boot.
+SEED_TOURNAMENTS = [
+    ("BBL Tournament I", {1: ["Jeremy", "Joe"], 2: ["Zach", "Bryce"]}),
+    ("BBL Tournament II", {
+        1: ["Jeremy", "Cole"],
+        2: ["Bryce", "Zaki"],
+        3: ["Prakash", "Milo"],
+    }),
+]
+
+
+def _seed_tournaments(db):
+    existing = db.execute("SELECT COUNT(*) FROM tournaments").fetchone()[0]
+    if existing:
+        return
+    for name, places in SEED_TOURNAMENTS:
+        cur = db.execute("INSERT INTO tournaments (name) VALUES (?)", (name,))
+        for place, names in places.items():
+            for person in names:
+                player = db.execute(
+                    "SELECT id, name FROM players WHERE lower(name)=lower(?)",
+                    (person,),
+                ).fetchone()
+                db.execute(
+                    """INSERT INTO tournament_results
+                       (tournament_id, place, player_id, name)
+                       VALUES (?,?,?,?)""",
+                    (
+                        cur.lastrowid,
+                        place,
+                        player["id"] if player else None,
+                        player["name"] if player else person,
                     ),
                 )
 
@@ -1239,43 +1295,271 @@ def api_player_games(player_id):
 
 
 # ---------------------------------------------------------------------------
+# Routes — tournaments
+# ---------------------------------------------------------------------------
+
+MAX_PLAYERS_PER_PLACE = 4
+PLACE_LABELS = {1: "First", 2: "Second", 3: "Third"}
+
+
+def serialize_tournaments(db):
+    tournaments = db.execute(
+        "SELECT * FROM tournaments ORDER BY id ASC"
+    ).fetchall()
+    results = []
+    for tournament in tournaments:
+        rows = db.execute(
+            """SELECT tr.place, tr.player_id, tr.name AS saved_name,
+                      p.name AS player_name, p.photo_url
+               FROM tournament_results tr
+               LEFT JOIN players p ON p.id = tr.player_id
+               WHERE tr.tournament_id=?
+               ORDER BY tr.place, tr.id""",
+            (tournament["id"],),
+        ).fetchall()
+        places = {"1": [], "2": [], "3": []}
+        for row in rows:
+            places[str(row["place"])].append({
+                "player_id": row["player_id"],
+                "name": row["player_name"] or row["saved_name"],
+                "photo_url": row["photo_url"] or "",
+                "is_guest": row["player_id"] is None,
+            })
+        results.append({
+            "id": tournament["id"],
+            "name": tournament["name"],
+            "places": places,
+        })
+    return results
+
+
+def parse_tournament_places(db, raw_places):
+    if not isinstance(raw_places, dict):
+        raise ValueError("Add players to at least first place.")
+
+    cleaned = {1: [], 2: [], 3: []}
+    seen_ids = set()
+    seen_names = set()
+
+    for place in (1, 2, 3):
+        entries = raw_places.get(str(place), raw_places.get(place, [])) or []
+        if not isinstance(entries, list):
+            raise ValueError(f"{PLACE_LABELS[place]} place is invalid.")
+        if len(entries) > MAX_PLAYERS_PER_PLACE:
+            raise ValueError(
+                f"{PLACE_LABELS[place]} place can have at most {MAX_PLAYERS_PER_PLACE} players."
+            )
+        for entry in entries:
+            if not isinstance(entry, dict):
+                raise ValueError(f"{PLACE_LABELS[place]} place is invalid.")
+            player_id = entry.get("player_id")
+            guest_name = (entry.get("guest_name") or "").strip()
+
+            if player_id:
+                player = db.execute(
+                    "SELECT id, name FROM players WHERE id=?", (player_id,)
+                ).fetchone()
+                if not player:
+                    raise ValueError("One of those players is no longer on the roster.")
+                person_id, person_name = player["id"], player["name"]
+            elif guest_name:
+                player = db.execute(
+                    "SELECT id, name FROM players WHERE lower(name)=lower(?)",
+                    (guest_name,),
+                ).fetchone()
+                if player:
+                    person_id, person_name = player["id"], player["name"]
+                else:
+                    person_id, person_name = None, guest_name
+            else:
+                raise ValueError("Each spot needs a roster player or a guest name.")
+
+            name_key = person_name.lower()
+            if person_id in seen_ids or name_key in seen_names:
+                raise ValueError(f"{person_name} is listed more than once.")
+            if person_id is not None:
+                seen_ids.add(person_id)
+            seen_names.add(name_key)
+            cleaned[place].append((person_id, person_name))
+
+    if not cleaned[1]:
+        raise ValueError("First place needs at least one player.")
+    return cleaned
+
+
+def save_tournament_results(db, tournament_id, places):
+    db.execute(
+        "DELETE FROM tournament_results WHERE tournament_id=?", (tournament_id,)
+    )
+    for place, members in places.items():
+        for player_id, name in members:
+            db.execute(
+                """INSERT INTO tournament_results
+                   (tournament_id, place, player_id, name)
+                   VALUES (?,?,?,?)""",
+                (tournament_id, place, player_id, name),
+            )
+
+
+@app.route("/api/tournaments", methods=["GET"])
+def api_get_tournaments():
+    return jsonify(serialize_tournaments(get_db()))
+
+
+@app.route("/api/tournaments", methods=["POST"])
+def api_create_tournament():
+    data = request.json or {}
+    if data.get("admin_key") != ADMIN_KEY:
+        return jsonify({"error": "Unauthorized"}), 403
+
+    name = (data.get("name") or "").strip()
+    if not name:
+        return jsonify({"error": "Tournament name is required."}), 400
+    if len(name) > 80:
+        return jsonify({"error": "Tournament name is too long."}), 400
+
+    db = get_db()
+    try:
+        places = parse_tournament_places(db, data.get("places"))
+        cur = db.execute("INSERT INTO tournaments (name) VALUES (?)", (name,))
+        save_tournament_results(db, cur.lastrowid, places)
+        db.commit()
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+    except sqlite3.IntegrityError:
+        return jsonify({"error": "A tournament with that name already exists."}), 409
+
+    return jsonify({"success": True}), 201
+
+
+@app.route("/api/tournaments/<int:tournament_id>", methods=["PUT"])
+def api_update_tournament(tournament_id):
+    data = request.json or {}
+    if data.get("admin_key") != ADMIN_KEY:
+        return jsonify({"error": "Unauthorized"}), 403
+
+    name = (data.get("name") or "").strip()
+    if not name:
+        return jsonify({"error": "Tournament name is required."}), 400
+    if len(name) > 80:
+        return jsonify({"error": "Tournament name is too long."}), 400
+
+    db = get_db()
+    existing = db.execute(
+        "SELECT id FROM tournaments WHERE id=?", (tournament_id,)
+    ).fetchone()
+    if not existing:
+        return jsonify({"error": "Tournament not found."}), 404
+
+    try:
+        places = parse_tournament_places(db, data.get("places"))
+        db.execute(
+            "UPDATE tournaments SET name=? WHERE id=?", (name, tournament_id)
+        )
+        save_tournament_results(db, tournament_id, places)
+        db.commit()
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+    except sqlite3.IntegrityError:
+        return jsonify({"error": "A tournament with that name already exists."}), 409
+
+    return jsonify({"success": True})
+
+
+@app.route("/api/tournaments/<int:tournament_id>", methods=["DELETE"])
+def api_delete_tournament(tournament_id):
+    data = request.json or {}
+    if data.get("admin_key") != ADMIN_KEY:
+        return jsonify({"error": "Unauthorized"}), 403
+
+    db = get_db()
+    deleted = db.execute(
+        "DELETE FROM tournaments WHERE id=?", (tournament_id,)
+    ).rowcount
+    db.commit()
+    if not deleted:
+        return jsonify({"error": "Tournament not found."}), 404
+    return jsonify({"success": True})
+
+
+# ---------------------------------------------------------------------------
 # Routes — requests API
 # ---------------------------------------------------------------------------
 
 @app.route("/api/requests", methods=["GET"])
 def api_get_requests():
     status = request.args.get("status", "open")
+    paginated = "page" in request.args or "per_page" in request.args
+    try:
+        page = max(1, int(request.args.get("page", 1)))
+        per_page = min(25, max(1, int(request.args.get("per_page", 6))))
+    except (TypeError, ValueError):
+        return jsonify({"error": "Invalid pagination"}), 400
+
+    player_id = request.args.get("player_id", "").strip()
+    if player_id:
+        try:
+            player_id = int(player_id)
+        except ValueError:
+            return jsonify({"error": "Invalid player"}), 400
+
     db = get_db()
     if status == "closed":
-        rows = db.execute(
-            """SELECT r.*, COALESCE(p.name, r.proposed_name) as player_name
-               FROM requests r LEFT JOIN players p ON r.player_id = p.id
-               WHERE r.status IN ('approved', 'denied', 'closed')
-               ORDER BY r.created_at DESC""",
-        ).fetchall()
+        where = "r.status IN ('approved', 'denied', 'closed')"
+        params = []
+        if player_id:
+            where += " AND r.player_id=?"
+            params.append(player_id)
     else:
-        rows = db.execute(
-            """SELECT r.*, COALESCE(p.name, r.proposed_name) as player_name
-               FROM requests r LEFT JOIN players p ON r.player_id = p.id
-               WHERE r.status=?
-               ORDER BY r.created_at DESC""",
-            (status,),
-        ).fetchall()
+        where = "r.status=?"
+        params = [status]
 
-    results = []
-    for row in rows:
-        d = dict(row)
-        d["upvote_count"] = db.execute(
-            "SELECT COUNT(*) FROM upvotes WHERE request_id=?", (d["id"],)
-        ).fetchone()[0]
-        d["downvote_count"] = db.execute(
-            "SELECT COUNT(*) FROM downvotes WHERE request_id=?", (d["id"],)
-        ).fetchone()[0]
-        d["comment_count"] = db.execute(
-            "SELECT COUNT(*) FROM comments WHERE request_id=?", (d["id"],)
-        ).fetchone()[0]
-        results.append(d)
-    return jsonify(results)
+    total = db.execute(
+        f"SELECT COUNT(*) FROM requests r WHERE {where}", params
+    ).fetchone()[0]
+    pages = max(1, (total + per_page - 1) // per_page)
+    page = min(page, pages)
+
+    limit_sql = ""
+    query_params = list(params)
+    if paginated:
+        limit_sql = " LIMIT ? OFFSET ?"
+        query_params.extend([per_page, (page - 1) * per_page])
+
+    rows = db.execute(
+        f"""SELECT r.*, COALESCE(p.name, r.proposed_name) as player_name,
+                   (SELECT COUNT(*) FROM upvotes u WHERE u.request_id=r.id) AS upvote_count,
+                   (SELECT COUNT(*) FROM downvotes d WHERE d.request_id=r.id) AS downvote_count,
+                   (SELECT COUNT(*) FROM comments c WHERE c.request_id=r.id) AS comment_count
+            FROM requests r LEFT JOIN players p ON r.player_id = p.id
+            WHERE {where}
+            ORDER BY r.created_at DESC{limit_sql}""",
+        query_params,
+    ).fetchall()
+
+    results = [dict(row) for row in rows]
+    if not paginated:
+        return jsonify(results)
+
+    return jsonify({
+        "items": results,
+        "page": page,
+        "per_page": per_page,
+        "total": total,
+        "pages": pages,
+    })
+
+
+@app.route("/api/requests/counts", methods=["GET"])
+def api_request_counts():
+    db = get_db()
+    open_count = db.execute(
+        "SELECT COUNT(*) FROM requests WHERE status='open'"
+    ).fetchone()[0]
+    closed_count = db.execute(
+        "SELECT COUNT(*) FROM requests WHERE status IN ('approved', 'denied', 'closed')"
+    ).fetchone()[0]
+    return jsonify({"open": open_count, "closed": closed_count})
 
 
 @app.route("/api/requests", methods=["POST"])
