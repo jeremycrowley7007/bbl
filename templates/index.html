@@ -54,18 +54,18 @@
       <h2 class="section-title">THE LEAGUE</h2>
       <div class="league-header">
         <nav class="league-nav" aria-label="League views">
-          <button type="button" class="league-tab active" data-tab="open" onclick="switchTab('open')">
+          <button type="button" class="league-tab active" data-tab="trophies" onclick="switchTab('trophies')">
+            Trophy Room
+          </button>
+          <button type="button" class="league-tab" data-tab="open" onclick="switchTab('open')">
             Open Requests <span id="open-count" class="badge">0</span>
           </button>
           <button type="button" class="league-tab" data-tab="closed" onclick="switchTab('closed')">
             Past Requests <span id="closed-count" class="badge">0</span>
           </button>
-          <button type="button" class="league-tab" data-tab="trophies" onclick="switchTab('trophies')">
-            Trophy Room
-          </button>
         </nav>
       </div>
-      <div id="requests-panel">
+      <div id="requests-panel" class="league-panel-hidden">
         <div id="past-request-tools" class="past-request-tools league-panel-hidden">
           <label for="past-player-filter">Show requests for</label>
           <select id="past-player-filter" onchange="changePastPlayerFilter(this.value)">
@@ -75,7 +75,7 @@
         <div id="requests-list" class="requests-container"></div>
         <div id="request-pagination" class="request-pagination"></div>
       </div>
-      <div id="trophy-room" class="trophy-room league-panel-hidden"></div>
+      <div id="trophy-room" class="trophy-room"></div>
     </section>
   </main>
 
@@ -280,7 +280,7 @@
     </div>
   </div>
 
-  <script src="/static/app.js?v=12"></script>
+  <script src="/static/app.js?v=13"></script>
 </body>
 
 </html>

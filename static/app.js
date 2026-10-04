@@ -1,6 +1,6 @@
 let players = [];
 let playerOrder = [];
-let currentTab = "open";
+let currentTab = "trophies";
 let adminMode = false;
 let currentDetailReqId = null;
 let photoUploadPlayerId = null;
@@ -1710,7 +1710,7 @@ async function approveNewPlayer(reqId) {
 
 document.addEventListener("DOMContentLoaded", () => {
   loadPlayers();
-  switchTab("open");
+  switchTab("trophies");
 });
 
 document.addEventListener("keydown", (e) => {
