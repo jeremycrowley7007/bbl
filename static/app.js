@@ -1,6 +1,7 @@
 let players = [];
 let playerOrder = [];
-let currentTab = "trophies";
+let currentTab = "season";
+let activeSeason = null;
 let adminMode = false;
 let currentDetailReqId = null;
 let photoUploadPlayerId = null;
@@ -220,6 +221,7 @@ async function loadPlayers() {
   populatePlayerSelect();
   populatePastPlayerFilter();
   if (currentTab === "trophies") renderTrophyRoom();
+  if (currentTab === "season") loadSeason();
 }
 
 // The roster is dealt in a fresh random order on every visit so the same faces
@@ -328,6 +330,13 @@ async function loadRequests() {
     updateRequestCounts(counts);
     tournaments = loaded;
     renderTrophyRoom();
+    return;
+  }
+
+  if (currentTab === "season") {
+    const counts = await countsPromise;
+    if (token !== requestLoadToken) return;
+    updateRequestCounts(counts);
     return;
   }
 
@@ -1483,12 +1492,18 @@ function switchTab(tab) {
     t.classList.toggle("active", t.dataset.tab === tab);
   });
 
+  const isSeason = tab === "season";
   const isTrophies = tab === "trophies";
-  document.getElementById("requests-panel").classList.toggle("league-panel-hidden", isTrophies);
+  const isRequests = tab === "open" || tab === "closed";
+
+  document.getElementById("season-panel").classList.toggle("league-panel-hidden", !isSeason);
   document.getElementById("trophy-room").classList.toggle("league-panel-hidden", !isTrophies);
+  document.getElementById("requests-panel").classList.toggle("league-panel-hidden", !isRequests);
   document.getElementById("past-request-tools").classList.toggle("league-panel-hidden", tab !== "closed");
 
-  loadRequests();
+  if (isSeason) loadSeason();
+  else if (isTrophies) renderTrophyRoom();
+  else loadRequests();
 }
 
 // --- Admin ---
@@ -1536,7 +1551,8 @@ async function attemptAdminLogin() {
     btn.textContent = "Admin ON";
     btn.classList.add("admin-on");
     renderPlayerCards();
-    loadRequests();
+    if (currentTab === "season") loadSeason();
+    else loadRequests();
     if (currentDetailReqId) {
       openDetailModal(currentDetailReqId);
     }
@@ -1559,7 +1575,8 @@ function exitAdminMode() {
   btn.textContent = "Admin";
   btn.classList.remove("admin-on");
   renderPlayerCards();
-  loadRequests();
+  if (currentTab === "season") loadSeason();
+  else loadRequests();
   if (currentDetailReqId) {
     openDetailModal(currentDetailReqId);
   }
@@ -1706,11 +1723,405 @@ async function approveNewPlayer(reqId) {
   closeDetailModal();
 }
 
+// =====================================================================
+// SEASON — standings, game log, log result
+// =====================================================================
+
+function formatDiff(diff) {
+  if (!diff) return "0";
+  return diff > 0 ? `+${diff}` : String(diff);
+}
+
+function formatGameDate(playedAt) {
+  const [datePart, timePart = "00:00"] = String(playedAt).split(" ");
+  const [y, m, d] = datePart.split("-").map(Number);
+  const [hh, mm] = timePart.split(":").map(Number);
+  const dt = new Date(y, m - 1, d, hh || 0, mm || 0);
+  const dateStr = dt.toLocaleDateString(undefined, {
+    month: "short",
+    day: "numeric",
+    year: dt.getFullYear() === new Date().getFullYear() ? undefined : "numeric",
+  });
+  if (!hh && !mm) return dateStr;
+  return `${dateStr} · ${dt.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })}`;
+}
+
+function sgLocalNow() {
+  const d = new Date();
+  const pad = (n) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+function seasonTeamOptionLabel(team) {
+  const names = (team.players || []).map((p) => p.name).filter(Boolean);
+  if (!names.length) return team.name;
+  return `${team.name} — ${names.join(", ")}`;
+}
+
+function renderSeasonMiniCard(p) {
+  const name = p.name;
+  const tier = cardTier(p.overall);
+  const overall = p.overall ?? "—";
+  const photoUrl = (p.photo_url || "").trim();
+  const hasPhoto = photoUrl.length > 0;
+  const photoHtml = hasPhoto
+    ? `<img src="${photoUrl}" alt="${escapeHtml(name)}">`
+    : `<span class="fut-photo-initials">${getInitials(name)}</span>`;
+
+  return `
+    <div class="season-mini-card fut-card tier-${tier}" onclick="openCardZoom(${p.id})" title="${escapeHtml(name)}">
+      <div class="fut-card-inner">
+        <div class="fut-card-face">
+          <div class="fut-card-name">${escapeHtml(name)}</div>
+          <div class="fut-card-body">
+            <div class="fut-card-meta">
+              <div class="fut-rating">${overall}</div>
+              <div class="fut-position">BBL</div>
+            </div>
+            <div class="fut-photo">${photoHtml}</div>
+          </div>
+        </div>
+      </div>
+    </div>`;
+}
+
+async function loadSeason() {
+  const body = document.getElementById("season-body");
+  if (!body) return;
+  body.innerHTML = `<div class="empty-state"><p>Loading season…</p></div>`;
+
+  try {
+    const res = await fetch("/api/seasons/active");
+    const data = await res.json();
+    if (data.error) {
+      body.innerHTML = `<div class="empty-state"><p>${escapeHtml(data.error)}</p></div>`;
+      return;
+    }
+    activeSeason = data;
+    const tab = document.querySelector('#league-section .league-tab[data-tab="season"]');
+    if (tab) tab.textContent = data.name || "Season 1";
+    renderSeason();
+  } catch (err) {
+    body.innerHTML = `<div class="empty-state"><p>Could not load season.</p></div>`;
+  }
+}
+
+function renderSeason() {
+  const body = document.getElementById("season-body");
+  if (!body || !activeSeason) return;
+
+  const standings = activeSeason.standings || [];
+  const games = activeSeason.games || [];
+
+  const rows = standings
+    .map((t, i) => {
+      const played = t.games_played > 0;
+      const diff = formatDiff(t.point_diff);
+      const diffCls = t.point_diff > 0 ? "up" : t.point_diff < 0 ? "down" : "";
+      const miniCards = (t.players || []).map(renderSeasonMiniCard).join("");
+      const rosterEmpty = !miniCards
+        ? `<span class="season-team-roster">—</span>`
+        : `<div class="season-team-cards">${miniCards}</div>`;
+      const isEditing = editingTeamId === t.id;
+      const nameBlock = isEditing
+        ? `<div class="season-rename-inline">
+            <input type="text" id="season-rename-input-${t.id}" class="season-rename-input"
+              maxlength="40" autocomplete="off" value="${escapeHtml(t.name)}">
+            <div class="season-rename-actions">
+              <button type="button" class="btn btn-small btn-primary" data-rename-save="${t.id}">Save</button>
+              <button type="button" class="btn btn-small btn-secondary" data-rename-cancel>Cancel</button>
+            </div>
+            <p id="rename-team-error-${t.id}" class="rename-team-error hidden"></p>
+          </div>`
+        : `<button type="button" class="season-team-name" data-rename-team="${t.id}" title="Rename team">
+            ${escapeHtml(t.name)}
+          </button>`;
+      return `
+      <tr>
+        <td class="st-rank">${played ? i + 1 : "—"}</td>
+        <td class="st-player season-team-cell">
+          ${nameBlock}
+          ${rosterEmpty}
+        </td>
+        <td class="st-w">${t.wins}</td>
+        <td class="st-l">${t.losses}</td>
+        <td class="st-diff ${diffCls}">${played ? diff : "—"}</td>
+      </tr>`;
+    })
+    .join("");
+
+  const standingsHtml = standings.length
+    ? `<table class="standings season-standings">
+        <thead>
+          <tr>
+            <th class="st-rank">#</th>
+            <th class="st-player">Team</th>
+            <th class="st-w">W</th>
+            <th class="st-l">L</th>
+            <th class="st-diff">pt diff</th>
+          </tr>
+        </thead>
+        <tbody>${rows}</tbody>
+      </table>`
+    : `<div class="empty-state"><p>No teams in this season yet.</p></div>`;
+
+  const logHtml = games.length
+    ? `<div class="game-log">${games.map(renderSeasonGameCard).join("")}</div>`
+    : `<div class="empty-state season-empty-log"><p>No games logged yet. Hit Log Game to start the season.</p></div>`;
+
+  body.innerHTML = `
+    <div class="season-toolbar">
+      <button type="button" class="btn btn-primary season-log-btn" onclick="openLogGameModal()">
+        + Log Game
+      </button>
+      <p class="season-hint">Ranked by record and point differential. Tap a team name to rename it.</p>
+    </div>
+    ${standingsHtml}
+    <h3 class="season-log-title">Game Log</h3>
+    ${logHtml}
+  `;
+
+  if (editingTeamId) {
+    requestAnimationFrame(() => {
+      const input = document.getElementById(`season-rename-input-${editingTeamId}`);
+      input?.focus();
+      input?.select();
+    });
+  }
+}
+
+function renderSeasonGameCard(g) {
+  const sides = (g.sides || [])
+    .map((s) => {
+      const names = (s.players || []).map((p) => escapeHtml(p.name)).join(", ");
+      return `
+      <span class="gc-side ${s.won ? "won" : "lost"}">
+        <span class="gc-score">${s.score}</span>
+        <span class="gc-names"><b>${escapeHtml(s.team_name)}</b>${names ? ` · ${names}` : ""}</span>
+      </span>`;
+    })
+    .join('<span class="gc-vs">vs</span>');
+
+  const adminHtml = adminMode
+    ? `<div class="gc-actions">
+        <button class="btn btn-small btn-secondary gc-delete" onclick="deleteSeasonGame(${g.id})">Del</button>
+      </div>`
+    : "";
+
+  return `
+  <div class="gc-card">
+    <div class="gc-row">
+      <span class="gc-date">${formatGameDate(g.played_at)}</span>
+      <div class="gc-result">${sides}</div>
+      ${adminHtml}
+    </div>
+    ${g.notes ? `<div class="gc-notes">${escapeHtml(g.notes)}</div>` : ""}
+  </div>`;
+}
+
+let editingTeamId = null;
+
+function showRenameError(teamId, message) {
+  const err = document.getElementById(`rename-team-error-${teamId}`);
+  if (!err) return;
+  err.textContent = message;
+  err.classList.remove("hidden");
+}
+
+function startRenameTeam(teamId) {
+  const team = (activeSeason?.standings || []).find((t) => t.id === teamId);
+  if (!team) return;
+  editingTeamId = teamId;
+  renderSeason();
+}
+
+function cancelRenameTeam() {
+  editingTeamId = null;
+  renderSeason();
+}
+
+async function submitRenameTeamInline(teamId) {
+  if (!activeSeason) return;
+  const input = document.getElementById(`season-rename-input-${teamId}`);
+  if (!input) return;
+  const name = input.value.trim();
+  const team = (activeSeason.standings || []).find((t) => t.id === teamId);
+  if (!team) return;
+  if (!name) {
+    showRenameError(teamId, "Team name is required.");
+    return;
+  }
+  if (name === team.name) {
+    editingTeamId = null;
+    renderSeason();
+    return;
+  }
+  const ok = await renameSeasonTeam(teamId, name);
+  if (ok) editingTeamId = null;
+}
+
+async function renameSeasonTeam(teamId, name) {
+  try {
+    const res = await fetch(`/api/season-teams/${teamId}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name }),
+    });
+    const data = await res.json();
+    if (data.error) {
+      showRenameError(teamId, data.error);
+      return false;
+    }
+    activeSeason = data;
+    renderSeason();
+    return true;
+  } catch {
+    showRenameError(teamId, "Could not save. Check your connection and try again.");
+    return false;
+  }
+}
+
+function openLogGameModal() {
+  if (!activeSeason) return;
+  const teams = activeSeason.standings || [];
+  [0, 1].forEach((i) => {
+    const sel = document.getElementById(`sg-team-${i}`);
+    sel.innerHTML = teams
+      .map((t) => `<option value="${t.id}">${escapeHtml(seasonTeamOptionLabel(t))}</option>`)
+      .join("");
+    if (teams[i]) sel.value = String(teams[i].id);
+    else if (teams[0]) sel.value = String(teams[0].id);
+    document.getElementById(`sg-score-${i}`).value = "";
+  });
+  // Default B to a different team when possible
+  if (teams.length >= 2) {
+    document.getElementById("sg-team-1").value = String(teams[1].id);
+  }
+  document.getElementById("sg-notes").value = "";
+  sgValidate();
+  document.getElementById("log-game-modal").classList.add("visible");
+}
+
+function closeLogGameModal() {
+  document.getElementById("log-game-modal").classList.remove("visible");
+}
+
+function sgValidate() {
+  const t0 = document.getElementById("sg-team-0").value;
+  const t1 = document.getElementById("sg-team-1").value;
+  const s0 = document.getElementById("sg-score-0").value.trim();
+  const s1 = document.getElementById("sg-score-1").value.trim();
+  const status = document.getElementById("sg-status");
+  const btn = document.getElementById("sg-save-btn");
+
+  let ok = false;
+  let message = "";
+  if (!t0 || !t1) message = "Pick both teams.";
+  else if (t0 === t1) message = "Pick two different teams.";
+  else if (s0 === "" || s1 === "") message = "Enter both scores.";
+  else if (!Number.isInteger(Number(s0)) || !Number.isInteger(Number(s1)) || Number(s0) < 0 || Number(s1) < 0) {
+    message = "Scores have to be whole numbers, zero or higher.";
+  } else if (Number(s0) === Number(s1)) message = "No ties — someone has to win.";
+  else {
+    ok = true;
+    const a = activeSeason.standings.find((t) => String(t.id) === t0);
+    const b = activeSeason.standings.find((t) => String(t.id) === t1);
+    const winner = Number(s0) > Number(s1) ? a : b;
+    const hi = Math.max(Number(s0), Number(s1));
+    const lo = Math.min(Number(s0), Number(s1));
+    message = `${winner?.name || "Winner"} wins ${hi}–${lo}`;
+  }
+
+  status.textContent = message;
+  status.classList.toggle("valid", ok);
+  btn.disabled = !ok;
+}
+
+async function submitSeasonGame() {
+  sgValidate();
+  if (document.getElementById("sg-save-btn").disabled || !activeSeason) return;
+
+  const body = {
+    season_id: activeSeason.id,
+    played_at: sgLocalNow(),
+    notes: document.getElementById("sg-notes").value.trim(),
+    sides: [
+      {
+        season_team_id: Number(document.getElementById("sg-team-0").value),
+        score: Number(document.getElementById("sg-score-0").value),
+      },
+      {
+        season_team_id: Number(document.getElementById("sg-team-1").value),
+        score: Number(document.getElementById("sg-score-1").value),
+      },
+    ],
+  };
+
+  const btn = document.getElementById("sg-save-btn");
+  btn.disabled = true;
+  const res = await fetch("/api/games", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  const data = await res.json();
+  if (data.error) {
+    const status = document.getElementById("sg-status");
+    status.textContent = data.error;
+    status.classList.remove("valid");
+    btn.disabled = false;
+    return;
+  }
+
+  closeLogGameModal();
+  await loadSeason();
+}
+
+async function deleteSeasonGame(gameId) {
+  if (!confirm("Delete this game? Standings will recalculate.")) return;
+  const res = await fetch(`/api/games/${gameId}`, {
+    method: "DELETE",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ admin_key: adminKey }),
+  });
+  const data = await res.json();
+  if (data.error) {
+    alert(data.error);
+    return;
+  }
+  await loadSeason();
+}
+
 // --- Init ---
 
 document.addEventListener("DOMContentLoaded", () => {
   loadPlayers();
-  switchTab("trophies");
+  switchTab("season");
+
+  const seasonPanel = document.getElementById("season-panel");
+  seasonPanel?.addEventListener("click", (e) => {
+    const renameBtn = e.target.closest("[data-rename-team]");
+    if (renameBtn) {
+      startRenameTeam(Number(renameBtn.dataset.renameTeam));
+      return;
+    }
+    const saveBtn = e.target.closest("[data-rename-save]");
+    if (saveBtn) {
+      submitRenameTeamInline(Number(saveBtn.dataset.renameSave));
+      return;
+    }
+    if (e.target.closest("[data-rename-cancel]")) {
+      cancelRenameTeam();
+    }
+  });
+
+  seasonPanel?.addEventListener("keydown", (e) => {
+    if (e.key !== "Enter" || !editingTeamId) return;
+    const input = document.getElementById(`season-rename-input-${editingTeamId}`);
+    if (e.target !== input) return;
+    e.preventDefault();
+    submitRenameTeamInline(editingTeamId);
+  });
 });
 
 document.addEventListener("keydown", (e) => {
@@ -1723,7 +2134,9 @@ document.addEventListener("keydown", (e) => {
     const gd = document.getElementById("game-day-overlay");
     if (gd && gd.classList.contains("visible")) {
       closeGameDayPicker();
+      return;
     }
+    if (editingTeamId) cancelRenameTeam();
   }
 });
 

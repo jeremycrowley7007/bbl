@@ -122,12 +122,42 @@ def init_db():
         );
         CREATE INDEX IF NOT EXISTS idx_stat_history_player
             ON stat_history(player_id, created_at);
+        -- Seasons own their teams. A season_team row is the durable identity
+        -- ("Rosso in Season 1" ≠ "Rosso in Season 2") — follow-up seasons get
+        -- fresh team rows even if the branding repeats.
+        CREATE TABLE IF NOT EXISTS seasons (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL UNIQUE,
+            sort_order INTEGER NOT NULL DEFAULT 0,
+            is_active INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT DEFAULT (datetime('now'))
+        );
+        CREATE TABLE IF NOT EXISTS season_teams (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            season_id INTEGER NOT NULL,
+            name TEXT NOT NULL,
+            sort_order INTEGER NOT NULL DEFAULT 0,
+            FOREIGN KEY (season_id) REFERENCES seasons(id) ON DELETE CASCADE,
+            UNIQUE(season_id, name)
+        );
+        CREATE INDEX IF NOT EXISTS idx_season_teams_season ON season_teams(season_id);
+        CREATE TABLE IF NOT EXISTS season_team_players (
+            season_team_id INTEGER NOT NULL,
+            player_id INTEGER NOT NULL,
+            PRIMARY KEY (season_team_id, player_id),
+            FOREIGN KEY (season_team_id) REFERENCES season_teams(id) ON DELETE CASCADE,
+            FOREIGN KEY (player_id) REFERENCES players(id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_stp_player ON season_team_players(player_id);
+
         CREATE TABLE IF NOT EXISTS games (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
+            season_id INTEGER,
             played_at TEXT NOT NULL,
             location TEXT DEFAULT '',
             notes TEXT DEFAULT '',
-            created_at TEXT DEFAULT (datetime('now'))
+            created_at TEXT DEFAULT (datetime('now')),
+            FOREIGN KEY (season_id) REFERENCES seasons(id)
         );
         CREATE INDEX IF NOT EXISTS idx_games_played_at ON games(played_at DESC);
         CREATE TABLE IF NOT EXISTS game_teams (
@@ -172,6 +202,22 @@ def init_db():
         CREATE INDEX IF NOT EXISTS idx_tournament_results_tournament
             ON tournament_results(tournament_id, place);
 
+        -- Season games: exactly two sides, each a season_team. Win/loss and
+        -- point diff are derived, never stored.
+        CREATE TABLE IF NOT EXISTS game_sides (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            game_id INTEGER NOT NULL,
+            season_team_id INTEGER NOT NULL,
+            side_index INTEGER NOT NULL,
+            score INTEGER NOT NULL,
+            FOREIGN KEY (game_id) REFERENCES games(id) ON DELETE CASCADE,
+            FOREIGN KEY (season_team_id) REFERENCES season_teams(id),
+            UNIQUE(game_id, side_index),
+            UNIQUE(game_id, season_team_id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_game_sides_game ON game_sides(game_id);
+        CREATE INDEX IF NOT EXISTS idx_game_sides_team ON game_sides(season_team_id);
+
         -- Win/loss is never stored, only derived: a team won if it outscored the
         -- best of the teams it was up against. Ties are rejected when a game is
         -- logged, so a tie in the data (a hand-edited row) counts for nobody
@@ -194,6 +240,7 @@ def init_db():
               JOIN game_teams b ON b.game_id = a.game_id AND b.id != a.id
               GROUP BY a.id) opp ON opp.team_id = gt.id
         WHERE gtp.player_id IS NOT NULL;
+
     """)
 
     # Migrate: add new stat columns for existing databases
@@ -214,12 +261,32 @@ def init_db():
         # no attribution, no team names to drift out of sync with reality.
         "ALTER TABLE games DROP COLUMN logged_by",
         "ALTER TABLE game_teams DROP COLUMN team_name",
+        "ALTER TABLE games ADD COLUMN season_id INTEGER REFERENCES seasons(id)",
     ]
     for sql in migrations:
         try:
             db.execute(sql)
         except sqlite3.OperationalError:
             pass
+
+    # Season standings view depends on games.season_id (added via migration on
+    # older DBs), so create it after migrations rather than in the bootstrap DDL.
+    db.execute("""
+        CREATE VIEW IF NOT EXISTS season_team_game_results AS
+        SELECT
+            gs.season_team_id   AS season_team_id,
+            g.id                AS game_id,
+            g.season_id         AS season_id,
+            g.played_at         AS played_at,
+            gs.score            AS score,
+            opp.score           AS opponent_score,
+            gs.score - opp.score AS point_diff,
+            CASE WHEN gs.score > opp.score THEN 'win' ELSE 'loss' END AS result
+        FROM game_sides gs
+        JOIN games g ON g.id = gs.game_id
+        JOIN game_sides opp ON opp.game_id = gs.game_id AND opp.id != gs.id
+        WHERE g.season_id IS NOT NULL
+    """)
 
     # Carry over old defense→tilt_aversion and long_game→flair for existing rows
     db.execute("UPDATE players SET tilt_aversion = defense WHERE tilt_aversion = 50 AND defense != 50")
@@ -254,6 +321,7 @@ def init_db():
         ensure_reset_in_history(db, LEAGUE_RESET_AT, LEAGUE_BASELINE)
 
     _seed_tournaments(db)
+    _seed_season_one(db)
 
     db.commit()
     db.close()
@@ -362,6 +430,61 @@ def _seed_tournaments(db):
             louie["id"] if louie else None,
         ),
     )
+
+
+def _seed_season_one(db):
+    """Bootstrap Season 1 with three local scratch teams if missing.
+
+    Real roster splits come later; for local tryouts we pair the six seed
+    players into Rosso / Azzurri / Verde. Team names stay editable in the UI.
+    """
+    existing = db.execute(
+        "SELECT id FROM seasons WHERE name=?", ("Season 1",)
+    ).fetchone()
+    if existing:
+        return
+
+    cur = db.execute(
+        "INSERT INTO seasons (name, sort_order, is_active) VALUES (?,?,1)",
+        ("Season 1", 1),
+    )
+    season_id = cur.lastrowid
+
+    # Prefer the classic seed roster; fall back to whatever players exist.
+    preferred = ["Jeremy", "Prakash", "Jackson", "Joe", "Zaki", "Bryce"]
+    by_name = {
+        r["name"]: r["id"]
+        for r in db.execute("SELECT id, name FROM players").fetchall()
+    }
+    player_ids = [by_name[n] for n in preferred if n in by_name]
+    if len(player_ids) < 6:
+        extras = [
+            r["id"]
+            for r in db.execute("SELECT id FROM players ORDER BY id").fetchall()
+            if r["id"] not in player_ids
+        ]
+        player_ids.extend(extras)
+    player_ids = player_ids[:6]
+    while len(player_ids) < 6:
+        player_ids.append(None)
+
+    roster_plan = [
+        ("Rosso", player_ids[0:2]),
+        ("Azzurri", player_ids[2:4]),
+        ("Verde", player_ids[4:6]),
+    ]
+    for i, (team_name, members) in enumerate(roster_plan):
+        tcur = db.execute(
+            "INSERT INTO season_teams (season_id, name, sort_order) VALUES (?,?,?)",
+            (season_id, team_name, i),
+        )
+        for pid in members:
+            if pid is None:
+                continue
+            db.execute(
+                "INSERT INTO season_team_players (season_team_id, player_id) VALUES (?,?)",
+                (tcur.lastrowid, pid),
+            )
 
 
 def reconstruct_player_stats_at(db, player_id, at_time):
@@ -774,135 +897,169 @@ def normalize_played_at(value):
     return None
 
 
-def parse_game_teams(db, data):
-    """Validate an incoming game payload.
+def parse_season_sides(db, season_id, data):
+    """Validate a season game: exactly two distinct season teams + scores."""
+    sides_in = data.get("sides")
+    if not isinstance(sides_in, list) or len(sides_in) != 2:
+        return None, "A season game needs exactly 2 teams"
 
-    Returns ``(teams, None)`` on success or ``(None, message)`` on failure, where
-    ``teams`` is a list of dicts with ``score``, ``player_ids`` and ``guests``.
-    Everything is checked before any row is written so a rejected payload never
-    leaves a half-built game behind.
-    """
-    teams_in = data.get("teams")
-    if not isinstance(teams_in, list) or len(teams_in) < 2:
-        return None, "A game needs at least 2 teams"
-    if len(teams_in) > MAX_TEAMS_PER_GAME:
-        return None, f"A game can have at most {MAX_TEAMS_PER_GAME} teams"
-
-    teams = []
-    seen_players = set()
-    for i, t in enumerate(teams_in):
-        if not isinstance(t, dict):
-            return None, f"Team {i + 1} is malformed"
-
+    sides = []
+    seen_teams = set()
+    for i, s in enumerate(sides_in):
+        if not isinstance(s, dict):
+            return None, f"Side {i + 1} is malformed"
         try:
-            score = int(t.get("score"))
+            team_id = int(s.get("season_team_id"))
+            score = int(s.get("score"))
         except (TypeError, ValueError):
-            return None, f"Team {i + 1} needs a numeric score"
+            return None, f"Side {i + 1} needs a team and numeric score"
         if score < 0:
-            return None, f"Team {i + 1} score cannot be negative"
+            return None, f"Side {i + 1} score cannot be negative"
+        if team_id in seen_teams:
+            return None, "Pick two different teams"
+        team = db.execute(
+            "SELECT id FROM season_teams WHERE id=? AND season_id=?",
+            (team_id, season_id),
+        ).fetchone()
+        if not team:
+            return None, f"Team {team_id} is not in this season"
+        seen_teams.add(team_id)
+        sides.append({"season_team_id": team_id, "score": score})
 
-        player_ids = []
-        for pid in t.get("player_ids") or []:
-            try:
-                pid = int(pid)
-            except (TypeError, ValueError):
-                return None, f"Team {i + 1} has an invalid player"
-            if pid in seen_players:
-                return None, "A player cannot be on two teams in the same game"
-            if not db.execute("SELECT 1 FROM players WHERE id=?", (pid,)).fetchone():
-                return None, f"Player {pid} not found"
-            seen_players.add(pid)
-            player_ids.append(pid)
-
-        guests = []
-        for name in t.get("guests") or []:
-            name = (name or "").strip()
-            if name:
-                guests.append(name)
-
-        roster_size = len(player_ids) + len(guests)
-        if roster_size == 0:
-            return None, f"Team {i + 1} needs at least 1 player"
-        if roster_size > MAX_PLAYERS_PER_TEAM:
-            return None, f"Team {i + 1} can have at most {MAX_PLAYERS_PER_TEAM} players"
-
-        teams.append({
-            "score": score,
-            "player_ids": player_ids,
-            "guests": guests,
-        })
-
-    top = max(t["score"] for t in teams)
-    if sum(1 for t in teams if t["score"] == top) > 1:
+    if sides[0]["score"] == sides[1]["score"]:
         return None, "Scores can't be tied — someone has to win"
 
-    return teams, None
+    return sides, None
 
 
-def write_game_teams(db, game_id, teams):
-    """Replace the team/roster rows for a game. Assumes ``teams`` is validated."""
-    db.execute("DELETE FROM game_teams WHERE game_id=?", (game_id,))
-    for i, t in enumerate(teams):
-        cur = db.execute(
-            "INSERT INTO game_teams (game_id, team_index, score) VALUES (?,?,?)",
-            (game_id, i, t["score"]),
+def write_game_sides(db, game_id, sides):
+    db.execute("DELETE FROM game_sides WHERE game_id=?", (game_id,))
+    for i, s in enumerate(sides):
+        db.execute(
+            """INSERT INTO game_sides (game_id, season_team_id, side_index, score)
+               VALUES (?,?,?,?)""",
+            (game_id, s["season_team_id"], i, s["score"]),
         )
-        team_row_id = cur.lastrowid
-        for pid in t["player_ids"]:
-            db.execute(
-                """INSERT INTO game_team_players (game_team_id, game_id, player_id, guest_name)
-                   VALUES (?,?,?,NULL)""",
-                (team_row_id, game_id, pid),
-            )
-        for name in t["guests"]:
-            db.execute(
-                """INSERT INTO game_team_players (game_team_id, game_id, player_id, guest_name)
-                   VALUES (?,?,NULL,?)""",
-                (team_row_id, game_id, name),
-            )
 
 
-def game_to_dict(db, row):
-    """Expand a game row into teams, rosters and the derived winner."""
+def season_team_roster(db, season_team_id):
+    rows = db.execute(
+        """SELECT p.*
+           FROM season_team_players stp
+           JOIN players p ON p.id = stp.player_id
+           WHERE stp.season_team_id=?
+           ORDER BY p.name""",
+        (season_team_id,),
+    ).fetchall()
+    return [player_to_dict(r) for r in rows]
+
+
+def season_game_to_dict(db, row):
+    """Expand a season-scoped game into sides + derived winner."""
     game = dict(row)
-    teams = db.execute(
-        "SELECT * FROM game_teams WHERE game_id=? ORDER BY team_index",
+    sides = db.execute(
+        """SELECT gs.*, st.name AS team_name
+           FROM game_sides gs
+           JOIN season_teams st ON st.id = gs.season_team_id
+           WHERE gs.game_id=?
+           ORDER BY gs.side_index""",
         (game["id"],),
     ).fetchall()
 
-    scores = [t["score"] for t in teams]
+    scores = [s["score"] for s in sides]
     top = max(scores, default=None)
-    outright = scores.count(top) == 1 if teams else False
-    game["teams"] = []
-    for t in teams:
-        members = db.execute(
-            """SELECT gtp.player_id, gtp.guest_name, p.name AS player_name, p.photo_url
-               FROM game_team_players gtp
-               LEFT JOIN players p ON gtp.player_id = p.id
-               WHERE gtp.game_team_id=?
-               ORDER BY gtp.id""",
-            (t["id"],),
-        ).fetchall()
-        td = dict(t)
-        td["players"] = [
-            {
-                "player_id": m["player_id"],
-                "name": m["player_name"] if m["player_id"] else m["guest_name"],
-                "photo_url": m["photo_url"] or "",
-                "is_guest": m["player_id"] is None,
-            }
-            for m in members
-        ]
-        td["won"] = outright and t["score"] == top
-        game["teams"].append(td)
+    outright = scores.count(top) == 1 if sides else False
 
-    winner = next((t for t in game["teams"] if t["won"]), None)
-    game["winning_team_index"] = winner["team_index"] if winner else None
+    game["sides"] = []
+    for s in sides:
+        game["sides"].append({
+            "id": s["id"],
+            "season_team_id": s["season_team_id"],
+            "team_name": s["team_name"],
+            "side_index": s["side_index"],
+            "score": s["score"],
+            "players": season_team_roster(db, s["season_team_id"]),
+            "won": bool(outright and s["score"] == top),
+        })
+
+    winner = next((s for s in game["sides"] if s["won"]), None)
+    game["winning_season_team_id"] = winner["season_team_id"] if winner else None
     return game
 
 
+def season_team_records(db, season_id):
+    rows = db.execute(
+        """SELECT season_team_id,
+                  SUM(result = 'win')  AS wins,
+                  SUM(result = 'loss') AS losses,
+                  COUNT(*)             AS games_played,
+                  SUM(point_diff)      AS point_diff
+           FROM season_team_game_results
+           WHERE season_id=?
+           GROUP BY season_team_id""",
+        (season_id,),
+    ).fetchall()
+    return {
+        r["season_team_id"]: {
+            "wins": r["wins"] or 0,
+            "losses": r["losses"] or 0,
+            "games_played": r["games_played"] or 0,
+            "point_diff": r["point_diff"] or 0,
+        }
+        for r in rows
+    }
+
+
+EMPTY_TEAM_RECORD = {"wins": 0, "losses": 0, "games_played": 0, "point_diff": 0}
+
+
+def season_to_dict(db, season_row):
+    season = dict(season_row)
+    records = season_team_records(db, season["id"])
+    teams = db.execute(
+        """SELECT * FROM season_teams
+           WHERE season_id=?
+           ORDER BY sort_order, id""",
+        (season["id"],),
+    ).fetchall()
+
+    standings = []
+    for t in teams:
+        rec = records.get(t["id"], EMPTY_TEAM_RECORD)
+        played = rec["games_played"]
+        standings.append({
+            "id": t["id"],
+            "name": t["name"],
+            "sort_order": t["sort_order"],
+            "players": season_team_roster(db, t["id"]),
+            "win_pct": round(rec["wins"] / played, 3) if played else None,
+            **rec,
+        })
+
+    standings.sort(
+        key=lambda s: (
+            s["win_pct"] is not None,
+            s["win_pct"] or 0,
+            s["wins"],
+            s["point_diff"],
+        ),
+        reverse=True,
+    )
+
+    games = db.execute(
+        """SELECT * FROM games
+           WHERE season_id=?
+           ORDER BY played_at DESC, id DESC""",
+        (season["id"],),
+    ).fetchall()
+
+    season["standings"] = standings
+    season["games"] = [season_game_to_dict(db, g) for g in games]
+    return season
+
+
 def player_records(db):
-    """Lifetime win/loss per player id, derived from logged games."""
+    """Legacy freeform player W/L — kept for older game rows only."""
     rows = db.execute(
         """SELECT player_id,
                   SUM(result = 'win')  AS wins,
@@ -1110,10 +1267,18 @@ def api_delete_player(player_id):
     played = db.execute(
         "SELECT COUNT(*) FROM game_team_players WHERE player_id=?", (player_id,)
     ).fetchone()[0]
-    if played:
+    rostered = db.execute(
+        "SELECT COUNT(*) FROM season_team_players WHERE player_id=?", (player_id,)
+    ).fetchone()[0]
+    if played or rostered:
+        bits = []
+        if played:
+            bits.append(f"{played} logged game(s)")
+        if rostered:
+            bits.append(f"{rostered} season roster(s)")
         return jsonify({
-            "error": f"{player['name']} appears in {played} logged game(s). "
-                     "Delete those games first."
+            "error": f"{player['name']} appears in {' and '.join(bits)}. "
+                     "Remove them there first."
         }), 409
 
     db.execute("DELETE FROM players WHERE id=?", (player_id,))
@@ -1151,20 +1316,88 @@ def api_upload_photo(player_id):
 
 
 # ---------------------------------------------------------------------------
-# Routes — games API
+# Routes — seasons + games API
 # ---------------------------------------------------------------------------
+
+@app.route("/api/seasons")
+def api_list_seasons():
+    db = get_db()
+    rows = db.execute(
+        "SELECT id, name, sort_order, is_active, created_at FROM seasons "
+        "ORDER BY sort_order, id"
+    ).fetchall()
+    return jsonify([dict(r) for r in rows])
+
+
+@app.route("/api/seasons/active")
+def api_active_season():
+    db = get_db()
+    row = db.execute(
+        "SELECT * FROM seasons WHERE is_active=1 ORDER BY sort_order, id LIMIT 1"
+    ).fetchone()
+    if not row:
+        row = db.execute(
+            "SELECT * FROM seasons ORDER BY sort_order, id LIMIT 1"
+        ).fetchone()
+    if not row:
+        return jsonify({"error": "No seasons yet"}), 404
+    return jsonify(season_to_dict(db, row))
+
+
+@app.route("/api/seasons/<int:season_id>")
+def api_get_season(season_id):
+    db = get_db()
+    row = db.execute("SELECT * FROM seasons WHERE id=?", (season_id,)).fetchone()
+    if not row:
+        return jsonify({"error": "Season not found"}), 404
+    return jsonify(season_to_dict(db, row))
+
+
+@app.route("/api/season-teams/<int:team_id>", methods=["PUT"])
+def api_rename_season_team(team_id):
+    data = request.json or {}
+    name = (data.get("name") or "").strip()
+    if not name:
+        return jsonify({"error": "Team name is required"}), 400
+    if len(name) > 40:
+        return jsonify({"error": "Team name is too long"}), 400
+
+    db = get_db()
+    team = db.execute("SELECT * FROM season_teams WHERE id=?", (team_id,)).fetchone()
+    if not team:
+        return jsonify({"error": "Team not found"}), 404
+
+    clash = db.execute(
+        "SELECT 1 FROM season_teams WHERE season_id=? AND name=? AND id!=?",
+        (team["season_id"], name, team_id),
+    ).fetchone()
+    if clash:
+        return jsonify({"error": "Another team in this season already has that name"}), 400
+
+    db.execute("UPDATE season_teams SET name=? WHERE id=?", (name, team_id))
+    db.commit()
+    season = db.execute(
+        "SELECT * FROM seasons WHERE id=?", (team["season_id"],)
+    ).fetchone()
+    return jsonify(season_to_dict(db, season))
+
 
 @app.route("/api/games")
 def api_get_games():
     db = get_db()
+    season_id = request.args.get("season_id", type=int)
     limit = request.args.get("limit", type=int)
-    sql = "SELECT * FROM games ORDER BY played_at DESC, id DESC"
-    params = ()
+    sql = "SELECT * FROM games WHERE season_id IS NOT NULL"
+    params = []
+    if season_id:
+        sql += " AND season_id=?"
+        params.append(season_id)
+    sql += " ORDER BY played_at DESC, id DESC"
     if limit and limit > 0:
         sql += " LIMIT ?"
-        params = (limit,)
+        params.append(limit)
     rows = db.execute(sql, params).fetchall()
-    return jsonify([game_to_dict(db, r) for r in rows])
+    return jsonify([season_game_to_dict(db, r) for r in rows])
 
 
 @app.route("/api/games/<int:game_id>")
@@ -1173,7 +1406,9 @@ def api_get_game(game_id):
     row = db.execute("SELECT * FROM games WHERE id=?", (game_id,)).fetchone()
     if not row:
         return jsonify({"error": "Game not found"}), 404
-    return jsonify(game_to_dict(db, row))
+    if row["season_id"] is None:
+        return jsonify({"error": "Legacy freeform games are no longer supported"}), 410
+    return jsonify(season_game_to_dict(db, row))
 
 
 @app.route("/api/games", methods=["POST"])
@@ -1181,28 +1416,38 @@ def api_create_game():
     data = request.json or {}
     db = get_db()
 
+    try:
+        season_id = int(data.get("season_id"))
+    except (TypeError, ValueError):
+        return jsonify({"error": "season_id is required"}), 400
+
+    season = db.execute("SELECT * FROM seasons WHERE id=?", (season_id,)).fetchone()
+    if not season:
+        return jsonify({"error": "Season not found"}), 404
+
     played_at = normalize_played_at(data.get("played_at"))
     if played_at is None:
         return jsonify({"error": "Invalid game date/time"}), 400
 
-    teams, err = parse_game_teams(db, data)
+    sides, err = parse_season_sides(db, season_id, data)
     if err:
         return jsonify({"error": err}), 400
 
     cur = db.execute(
-        "INSERT INTO games (played_at, location, notes) VALUES (?,?,?)",
+        "INSERT INTO games (season_id, played_at, location, notes) VALUES (?,?,?,?)",
         (
+            season_id,
             played_at,
             (data.get("location") or "").strip(),
             (data.get("notes") or "").strip(),
         ),
     )
     game_id = cur.lastrowid
-    write_game_teams(db, game_id, teams)
+    write_game_sides(db, game_id, sides)
     db.commit()
 
     row = db.execute("SELECT * FROM games WHERE id=?", (game_id,)).fetchone()
-    return jsonify(game_to_dict(db, row)), 201
+    return jsonify(season_game_to_dict(db, row)), 201
 
 
 @app.route("/api/games/<int:game_id>", methods=["PUT"])
@@ -1215,6 +1460,8 @@ def api_update_game(game_id):
     game = db.execute("SELECT * FROM games WHERE id=?", (game_id,)).fetchone()
     if not game:
         return jsonify({"error": "Game not found"}), 404
+    if game["season_id"] is None:
+        return jsonify({"error": "Legacy freeform games are no longer supported"}), 410
 
     played_at = game["played_at"]
     if "played_at" in data:
@@ -1222,9 +1469,9 @@ def api_update_game(game_id):
         if played_at is None:
             return jsonify({"error": "Invalid game date/time"}), 400
 
-    teams = None
-    if "teams" in data:
-        teams, err = parse_game_teams(db, data)
+    sides = None
+    if "sides" in data:
+        sides, err = parse_season_sides(db, game["season_id"], data)
         if err:
             return jsonify({"error": err}), 400
 
@@ -1237,12 +1484,12 @@ def api_update_game(game_id):
             game_id,
         ),
     )
-    if teams is not None:
-        write_game_teams(db, game_id, teams)
+    if sides is not None:
+        write_game_sides(db, game_id, sides)
     db.commit()
 
     row = db.execute("SELECT * FROM games WHERE id=?", (game_id,)).fetchone()
-    return jsonify(game_to_dict(db, row))
+    return jsonify(season_game_to_dict(db, row))
 
 
 @app.route("/api/games/<int:game_id>", methods=["DELETE"])
@@ -1258,63 +1505,6 @@ def api_delete_game(game_id):
     db.execute("DELETE FROM games WHERE id=?", (game_id,))
     db.commit()
     return jsonify({"success": True})
-
-
-@app.route("/api/records")
-def api_records():
-    """Lifetime win/loss standings, best record first."""
-    db = get_db()
-    records = player_records(db)
-    rows = db.execute("SELECT id, name, photo_url FROM players ORDER BY name").fetchall()
-
-    standings = []
-    for r in rows:
-        rec = records.get(r["id"], EMPTY_RECORD)
-        played = rec["games_played"]
-        standings.append({
-            "player_id": r["id"],
-            "name": r["name"],
-            "photo_url": r["photo_url"],
-            "win_pct": round(rec["wins"] / played, 3) if played else None,
-            **rec,
-        })
-
-    standings.sort(
-        key=lambda s: (s["win_pct"] is not None, s["win_pct"] or 0, s["wins"], s["point_diff"]),
-        reverse=True,
-    )
-    return jsonify(standings)
-
-
-@app.route("/api/players/<int:player_id>/games")
-def api_player_games(player_id):
-    db = get_db()
-    if not db.execute("SELECT 1 FROM players WHERE id=?", (player_id,)).fetchone():
-        return jsonify({"error": "Player not found"}), 404
-
-    rows = db.execute(
-        """SELECT g.* FROM games g
-           JOIN game_team_players gtp ON gtp.game_id = g.id
-           WHERE gtp.player_id=?
-           ORDER BY g.played_at DESC, g.id DESC""",
-        (player_id,),
-    ).fetchall()
-
-    results = db.execute(
-        "SELECT game_id, result, score, opponent_score, point_diff "
-        "FROM player_game_results WHERE player_id=?",
-        (player_id,),
-    ).fetchall()
-    by_game = {r["game_id"]: dict(r) for r in results}
-
-    games = []
-    for row in rows:
-        d = game_to_dict(db, row)
-        d["player_result"] = by_game.get(d["id"])
-        games.append(d)
-
-    record = player_records(db).get(player_id, EMPTY_RECORD)
-    return jsonify({"record": record, "games": games})
 
 
 # ---------------------------------------------------------------------------

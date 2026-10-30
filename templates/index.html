@@ -54,7 +54,10 @@
       <h2 class="section-title">THE LEAGUE</h2>
       <div class="league-header">
         <nav class="league-nav" aria-label="League views">
-          <button type="button" class="league-tab active" data-tab="trophies" onclick="switchTab('trophies')">
+          <button type="button" class="league-tab active" data-tab="season" onclick="switchTab('season')">
+            Season 1
+          </button>
+          <button type="button" class="league-tab" data-tab="trophies" onclick="switchTab('trophies')">
             Trophy Room
           </button>
           <button type="button" class="league-tab" data-tab="open" onclick="switchTab('open')">
@@ -64,6 +67,9 @@
             Past Requests <span id="closed-count" class="badge">0</span>
           </button>
         </nav>
+      </div>
+      <div id="season-panel">
+        <div id="season-body"></div>
       </div>
       <div id="requests-panel" class="league-panel-hidden">
         <div id="past-request-tools" class="past-request-tools league-panel-hidden">
@@ -75,8 +81,44 @@
         <div id="requests-list" class="requests-container"></div>
         <div id="request-pagination" class="request-pagination"></div>
       </div>
-      <div id="trophy-room" class="trophy-room"></div>
+      <div id="trophy-room" class="trophy-room league-panel-hidden"></div>
     </section>
+
+  <!-- Log Season Game Modal -->
+  <div id="log-game-modal" class="modal" onclick="closeModal(event)">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h3>Log Game Result</h3>
+        <button class="modal-close" onclick="closeLogGameModal()">&times;</button>
+      </div>
+      <div class="sg-form">
+        <div class="sg-sides">
+          <div class="sg-side">
+            <label for="sg-team-0">Team A</label>
+            <select id="sg-team-0" onchange="sgValidate()"></select>
+            <input type="number" id="sg-score-0" class="sg-score" min="0" inputmode="numeric"
+              placeholder="0" oninput="sgValidate()">
+          </div>
+          <div class="sg-vs">VS</div>
+          <div class="sg-side">
+            <label for="sg-team-1">Team B</label>
+            <select id="sg-team-1" onchange="sgValidate()"></select>
+            <input type="number" id="sg-score-1" class="sg-score" min="0" inputmode="numeric"
+              placeholder="0" oninput="sgValidate()">
+          </div>
+        </div>
+        <div class="form-group">
+          <label>Notes <span class="lg-optional">optional</span></label>
+          <input type="text" id="sg-notes" placeholder="Comeback of the century, wind was a factor, etc.">
+        </div>
+        <div id="sg-status" class="sg-status"></div>
+        <button type="button" id="sg-save-btn" class="btn btn-primary btn-full" onclick="submitSeasonGame()" disabled>
+          SAVE RESULT
+        </button>
+      </div>
+    </div>
+  </div>
+
   </main>
 
   <!-- New Request Modal -->
@@ -280,7 +322,7 @@
     </div>
   </div>
 
-  <script src="/static/app.js?v=15"></script>
+  <script src="/static/app.js?v=19"></script>
 </body>
 
 </html>
