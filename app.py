@@ -304,8 +304,8 @@ def _backfill_stat_history(db):
                 )
 
 
-# Seeded only when the trophy room is empty, so production keeps anything
-# an admin logs after the first boot.
+# Inserted by name when missing, so later tournaments can be shipped without
+# wiping admin-logged results already on production.
 SEED_TOURNAMENTS = [
     ("BBL Tournament I", {1: ["Jeremy", "Joe"], 2: ["Zach", "Bryce"]}),
     ("BBL Tournament II", {
@@ -313,14 +313,20 @@ SEED_TOURNAMENTS = [
         2: ["Bryce", "Zaki"],
         3: ["Prakash", "Milo"],
     }),
+    ("BBL Tournament III", {
+        1: ["Jackson", "Milo"],
+        2: ["Luc", "Seiichi"],
+    }),
 ]
 
 
 def _seed_tournaments(db):
-    existing = db.execute("SELECT COUNT(*) FROM tournaments").fetchone()[0]
-    if existing:
-        return
     for name, places in SEED_TOURNAMENTS:
+        existing = db.execute(
+            "SELECT id FROM tournaments WHERE name=?", (name,)
+        ).fetchone()
+        if existing:
+            continue
         cur = db.execute("INSERT INTO tournaments (name) VALUES (?)", (name,))
         for place, names in places.items():
             for person in names:

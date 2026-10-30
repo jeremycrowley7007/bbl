@@ -1773,18 +1773,23 @@ function gdPlayerSepClasses(id) {
 }
 
 function gdGetTeamSplit(n) {
-  switch (n) {
-    case 2: return [1, 1];
-    case 3: return [1, 2];
-    case 4: return [2, 2];
-    case 5: return [2, 3];
-    case 6: return [3, 3];
-    case 7: return null;
-    case 8: return [2, 2, 2, 2];
-    default:
-      if (n < 2) return null;
-      return [Math.floor(n / 2), Math.ceil(n / 2)];
+  // Prefer teams of 2. Use a single team of 3 only when the count is odd.
+  // Never put more than 3 on a team. Need at least two teams to pick.
+  if (n < 2) return null;
+  if (n === 2) return [1, 1];
+  if (n === 3) return [1, 2];
+
+  const teams = [];
+  let remaining = n;
+  if (remaining % 2 === 1) {
+    teams.push(3);
+    remaining -= 3;
   }
+  while (remaining > 0) {
+    teams.push(2);
+    remaining -= 2;
+  }
+  return teams;
 }
 
 function gdFormatString(split) {
