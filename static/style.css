@@ -3164,6 +3164,18 @@ body.admin-active header {
 .gd-team-3 .gd-team-banner {
   background: linear-gradient(135deg, #7c5cbf 0%, #4a307a 100%);
 }
+.gd-team-4 .gd-team-banner {
+  background: linear-gradient(135deg, #d4a017 0%, #8a680a 100%);
+}
+.gd-team-5 .gd-team-banner {
+  background: linear-gradient(135deg, #e07a2f 0%, #9a4a12 100%);
+}
+.gd-team-6 .gd-team-banner {
+  background: linear-gradient(135deg, #2aa8c4 0%, #156a7e 100%);
+}
+.gd-team-7 .gd-team-banner {
+  background: linear-gradient(135deg, #d45a8c 0%, #8a2f55 100%);
+}
 
 .gd-team-cards {
   display: flex;
@@ -3222,6 +3234,10 @@ body.admin-active header {
 .gd-team-1 .gd-card-slot::after { background: radial-gradient(circle, rgba(59, 125, 216, 0.5), transparent 65%); }
 .gd-team-2 .gd-card-slot::after { background: radial-gradient(circle, rgba(42, 157, 110, 0.5), transparent 65%); }
 .gd-team-3 .gd-card-slot::after { background: radial-gradient(circle, rgba(124, 92, 191, 0.5), transparent 65%); }
+.gd-team-4 .gd-card-slot::after { background: radial-gradient(circle, rgba(212, 160, 23, 0.5), transparent 65%); }
+.gd-team-5 .gd-card-slot::after { background: radial-gradient(circle, rgba(224, 122, 47, 0.5), transparent 65%); }
+.gd-team-6 .gd-card-slot::after { background: radial-gradient(circle, rgba(42, 168, 196, 0.5), transparent 65%); }
+.gd-team-7 .gd-card-slot::after { background: radial-gradient(circle, rgba(212, 90, 140, 0.5), transparent 65%); }
 
 @keyframes gd-glow-burst {
   0% { opacity: 0; transform: scale(0.6); }
@@ -3311,6 +3327,10 @@ body.admin-active header {
 .gd-flash.team-1 { background: radial-gradient(ellipse at center, rgba(100, 160, 255, 0.7), transparent 70%); }
 .gd-flash.team-2 { background: radial-gradient(ellipse at center, rgba(100, 220, 160, 0.7), transparent 70%); }
 .gd-flash.team-3 { background: radial-gradient(ellipse at center, rgba(180, 130, 240, 0.7), transparent 70%); }
+.gd-flash.team-4 { background: radial-gradient(ellipse at center, rgba(240, 190, 60, 0.7), transparent 70%); }
+.gd-flash.team-5 { background: radial-gradient(ellipse at center, rgba(255, 150, 70, 0.7), transparent 70%); }
+.gd-flash.team-6 { background: radial-gradient(ellipse at center, rgba(70, 210, 230, 0.7), transparent 70%); }
+.gd-flash.team-7 { background: radial-gradient(ellipse at center, rgba(240, 120, 170, 0.7), transparent 70%); }
 
 /* Subtle screen shake on banner */
 @keyframes gd-shake {

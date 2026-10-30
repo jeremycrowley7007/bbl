@@ -1732,10 +1732,14 @@ document.addEventListener("keydown", (e) => {
 // =====================================================================
 
 const GD_TEAMS = [
-  { tag: "TEAM",   name: "ROSSO",   color: "#d44a4a" },
-  { tag: "TEAM",   name: "AZZURRI", color: "#3b7dd8" },
-  { tag: "TEAM",   name: "VERDE",   color: "#2a9d6e" },
-  { tag: "TEAM",   name: "VIOLA",   color: "#7c5cbf" },
+  { tag: "TEAM", name: "ROSSO",   color: "#d44a4a" },
+  { tag: "TEAM", name: "AZZURRI", color: "#3b7dd8" },
+  { tag: "TEAM", name: "VERDE",   color: "#2a9d6e" },
+  { tag: "TEAM", name: "VIOLA",   color: "#7c5cbf" },
+  { tag: "TEAM", name: "GIALLO",  color: "#d4a017" },
+  { tag: "TEAM", name: "ARANCIO", color: "#e07a2f" },
+  { tag: "TEAM", name: "CELESTE", color: "#2aa8c4" },
+  { tag: "TEAM", name: "ROSA",    color: "#d45a8c" },
 ];
 
 const gdSelected = new Set();

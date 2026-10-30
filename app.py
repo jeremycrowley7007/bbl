@@ -315,7 +315,7 @@ SEED_TOURNAMENTS = [
     }),
     ("BBL Tournament III", {
         1: ["Jackson", "Milo"],
-        2: ["Luc", "Seiichi"],
+        2: ["Louie", "Seiichi"],
     }),
 ]
 
@@ -345,6 +345,23 @@ def _seed_tournaments(db):
                         player["name"] if player else person,
                     ),
                 )
+
+    # Typo fix: Tournament III was briefly seeded with "Luc" instead of Louie.
+    louie = db.execute(
+        "SELECT id, name FROM players WHERE lower(name)=lower(?)", ("Louie",)
+    ).fetchone()
+    db.execute(
+        """UPDATE tournament_results
+           SET name=?, player_id=?
+           WHERE lower(name)=lower('Luc')
+           AND tournament_id IN (
+             SELECT id FROM tournaments WHERE name='BBL Tournament III'
+           )""",
+        (
+            louie["name"] if louie else "Louie",
+            louie["id"] if louie else None,
+        ),
+    )
 
 
 def reconstruct_player_stats_at(db, player_id, at_time):
