@@ -1502,7 +1502,8 @@ function switchTab(tab) {
   document.getElementById("past-request-tools").classList.toggle("league-panel-hidden", tab !== "closed");
 
   if (isSeason) loadSeason();
-  else if (isTrophies) renderTrophyRoom();
+  // Trophy Room loads tournaments via loadRequests() — don't render from a
+  // stale empty array or the room looks vacant even when data exists.
   else loadRequests();
 }
 
