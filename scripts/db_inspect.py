@@ -26,7 +26,7 @@ STAT_LABELS = {
     "tilt_aversion": "TLT",
     "wall_ball": "WBL",
     "substance_use": "SUB",
-    "flair": "FLR",
+    "flair": "CLH",
 }
 
 

@@ -293,7 +293,7 @@ def init_db():
     db.execute("UPDATE players SET flair = long_game WHERE flair = 50 AND long_game != 50")
 
     seed_players = [
-        #       name       PLC  BWL  WBL  SUB  TLT  FLR
+        #       name       PLC  BWL  WBL  SUB  TLT  CLH
         ("Jeremy",   72, 78, 70, 74, 65, 68),
         ("Prakash",  68, 62, 71, 66, 75, 73),
         ("Jackson",  80, 70, 68, 77, 72, 74),

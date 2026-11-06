@@ -36,10 +36,10 @@ Click the Admin button and enter the admin key to:
 Each player is rated 1-99 in six categories:
 - **PLC** Placement — accuracy of ball placement
 - **BWL** Bowling — power and consistency of throws
-- **DEF** Defense — ability to knock opponents away
+- **TLT** Tilt Aversion — composure in tough situations
 - **WBL** Wall Ball — bank shot and wall play
 - **SUB** Substance Use — performance enhancement via beverages
-- **LNG** Long Game — distance throws and strategy
+- **CLH** Clutch — turning a round with a clutch late shot
 
 ## Deploying to Railway
 

@@ -37,7 +37,7 @@ const STAT_NAMES = {
   tilt_aversion: "TLT",
   wall_ball: "WBL",
   substance_use: "SUB",
-  flair: "FLR",
+  flair: "CLH",
 };
 
 const STAT_FULL = {
@@ -46,7 +46,7 @@ const STAT_FULL = {
   tilt_aversion: "Tilt Aversion",
   wall_ball: "Wall Ball",
   substance_use: "Substance Use",
-  flair: "Flair",
+  flair: "Clutch",
 };
 
 const STAT_DESC = {
@@ -2369,7 +2369,7 @@ function gdRenderPickCard(p, isGuest) {
         </div>
         <div class="fut-stat-row">
           <div class="fut-stat"><span class="fut-stat-val">--</span><span class="fut-stat-label">TLT</span></div>
-          <div class="fut-stat"><span class="fut-stat-val">--</span><span class="fut-stat-label">FLR</span></div>
+          <div class="fut-stat"><span class="fut-stat-val">--</span><span class="fut-stat-label">CLH</span></div>
         </div>
       </div>`;
   } else {
@@ -2736,7 +2736,7 @@ function gdRenderRevealCard(p, dir) {
               </div>
               <div class="fut-stat-row">
                 <div class="fut-stat"><span class="fut-stat-val">--</span><span class="fut-stat-label">TLT</span></div>
-                <div class="fut-stat"><span class="fut-stat-val">--</span><span class="fut-stat-label">FLR</span></div>
+                <div class="fut-stat"><span class="fut-stat-val">--</span><span class="fut-stat-label">CLH</span></div>
               </div>
             </div>
           </div>

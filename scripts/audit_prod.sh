@@ -24,7 +24,7 @@ echo "=============================================="
 echo
 echo "=== CURRENT PLAYER STATS ==="
 run "SELECT id, name, placement AS plc, bowling AS bwl, tilt_aversion AS tlt,
-            wall_ball AS wbl, substance_use AS sub, flair AS flr
+            wall_ball AS wbl, substance_use AS sub, flair AS clh
      FROM players ORDER BY id;"
 
 echo
